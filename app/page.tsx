@@ -6,7 +6,13 @@ type Action = "cup" | "tea" | "pearls" | "wrong" | "measure" | "seal" | "label" 
 type OrderStatus = "待制作" | "制作中" | "异常待复核" | "已完成";
 type AnomalyKind = "wrongIngredient" | "extraPearls" | "overfill" | "sequence" | "wrongLabel" | null;
 type VisionState = "未检测" | "识别中" | "视觉模型在线" | "低置信度" | "演示兜底" | "服务异常";
-type VisionObservation = { event: Action | "unknown"; confidence: number; reason: string; ticket?: { matchesCurrentOrder?: boolean | null } | null };
+type Ticket = { orderId?: string | null; drink?: string | null; sugar?: string | null; ice?: string | null; topping?: string | null; matchesCurrentOrder?: boolean | null };
+type VisionObservation = { event: Action | "unknown"; confidence: number; reason: string; ticket?: Ticket | null };
+type AnomalyRecord = { id: string; at: string; event: string; confidence?: number; corrected: boolean; correction?: string };
+type DetectionMeta = { confidence?: number; reason?: string; ticket?: Ticket | null };
+
+const VISION_MIN_GAP = 2_400;
+const VISION_STABLE_RECHECK = 7_000;
 
 const steps: { id: Exclude<Action, "wrong" | "wrongLabel" | "overfill">; title: string; prompt: string }[] = [
   { id: "cup", title: "取杯", prompt: "请取用订单 A102 的杯子。" },
@@ -48,6 +54,9 @@ export default function Home() {
   const lastDetection = useRef<{ id: Action; at: number } | null>(null);
   const visionBusyRef = useRef(false);
   const visionAvailableRef = useRef<boolean | null>(null);
+  const visionLastRequestRef = useRef(0);
+  const visionLastSceneRef = useRef<Uint8Array | null>(null);
+  const lastAnomalyRecordRef = useRef<string | null>(null);
   const stateRef = useRef<{ status: OrderStatus; stepIndex: number; pendingAnomaly: AnomalyKind }>({ status: "待制作", stepIndex: 0, pendingAnomaly: null });
 
   const [cameraOn, setCameraOn] = useState(false);
@@ -64,6 +73,8 @@ export default function Home() {
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [visionState, setVisionState] = useState<VisionState>("未检测");
   const [visionObservation, setVisionObservation] = useState<VisionObservation | null>(null);
+  const [visionError, setVisionError] = useState<string | null>(null);
+  const [anomalyRecords, setAnomalyRecords] = useState<AnomalyRecord[]>([]);
 
   useEffect(() => {
     stateRef.current = { status, stepIndex, pendingAnomaly };
@@ -96,13 +107,22 @@ export default function Home() {
     }, 10_000);
   };
 
-  const raiseAnomaly = (kind: Exclude<AnomalyKind, null>, alert: string, event: string) => {
+  const raiseAnomaly = (kind: Exclude<AnomalyKind, null>, alert: string, event: string, meta: DetectionMeta = {}) => {
+    const recordId = `${Date.now()}-${kind}`;
+    lastAnomalyRecordRef.current = recordId;
     stateRef.current = { ...stateRef.current, status: "异常待复核", pendingAnomaly: kind };
     setStatus("异常待复核");
     setPendingAnomaly(kind);
     setAnomalies((value) => value + 1);
     setMessage(alert);
     addEvent(`异常：${event}`);
+    setAnomalyRecords((records) => [{
+      id: recordId,
+      at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+      event: meta.reason ? `${event}｜${meta.reason}` : event,
+      confidence: meta.confidence,
+      corrected: false,
+    }, ...records].slice(0, 4));
     speak(alert);
     prepareEventClip();
   };
@@ -115,13 +135,19 @@ export default function Home() {
     setAnomalies(0);
     setAutoCorrections(0);
     setPendingAnomaly(null);
+    setAnomalyRecords([]);
+    setVisionObservation(null);
+    setVisionError(null);
+    visionLastSceneRef.current = null;
+    visionLastRequestRef.current = 0;
+    lastAnomalyRecordRef.current = null;
     setEvents(["订单 A102 已下发：少糖、去冰、加珍珠"]);
     setStartedAt(Date.now());
     setMessage(steps[0].prompt);
     speak(`订单 A102 开始制作。 ${steps[0].prompt}`);
   };
 
-  const detectAction = (id: Action, source = "视觉") => {
+  const detectAction = (id: Action, source = "视觉", meta: DetectionMeta = {}) => {
     const current = stateRef.current;
     if (current.status !== "制作中" && current.status !== "异常待复核") return;
     const now = Date.now();
@@ -149,6 +175,11 @@ export default function Home() {
       setStatus("制作中");
       setPendingAnomaly(null);
       addEvent(`自动纠正：${correction}`);
+      if (lastAnomalyRecordRef.current) {
+        const recordId = lastAnomalyRecordRef.current;
+        setAnomalyRecords((records) => records.map((record) => record.id === recordId ? { ...record, corrected: true, correction } : record));
+        lastAnomalyRecordRef.current = null;
+      }
       speak(`已自动纠正。 ${correction}。`);
 
       if (correctedKind === "extraPearls") {
@@ -158,26 +189,26 @@ export default function Home() {
     }
 
     if (id === "wrong") {
-      raiseAnomaly("wrongIngredient", "原料不匹配：当前需要珍珠，检测到椰果。请取回椰果并加入珍珠。", "检测到不匹配加料“椰果”");
+      raiseAnomaly("wrongIngredient", "原料不匹配：当前需要珍珠，检测到椰果。请取回椰果并加入珍珠。", "检测到不匹配加料“椰果”", meta);
       return;
     }
     if (id === "overfill") {
-      raiseAnomaly("overfill", "液体超过标准线，请检查用量并回到标准刻度。", "量杯液位超过标准线");
+      raiseAnomaly("overfill", "液体超过标准线，请检查用量并回到标准刻度。", "量杯液位超过标准线", meta);
       return;
     }
     if (id === "wrongLabel" && steps[current.stepIndex]?.id === "label") {
-      raiseAnomaly("wrongLabel", "杯贴与订单不一致：请核对少糖、去冰和珍珠选项。", "杯贴定制项不匹配");
+      raiseAnomaly("wrongLabel", "杯贴与订单不一致：请核对少糖、去冰和珍珠选项。", "杯贴定制项不匹配", meta);
       return;
     }
     if (id === "pearls" && current.stepIndex > 1) {
-      raiseAnomaly("extraPearls", "疑似重复加料：本单珍珠已完成，请将多余珍珠倒回原料盒。", "检测到第二次加入珍珠");
+      raiseAnomaly("extraPearls", "疑似重复加料：本单珍珠已完成，请将多余珍珠倒回原料盒。", "检测到第二次加入珍珠", meta);
       return;
     }
 
     const expected = steps[current.stepIndex];
     if (!expected) return;
     if (id !== expected.id) {
-      raiseAnomaly("sequence", `步骤顺序异常：当前应“${expected.title}”。`, `当前识别为“${markers.find((item) => item.id === id)?.name ?? id}”`);
+      raiseAnomaly("sequence", `步骤顺序异常：当前应“${expected.title}”。`, `当前识别为“${markers.find((item) => item.id === id)?.name ?? id}”`, meta);
       return;
     }
 
@@ -271,23 +302,45 @@ export default function Home() {
       capture.width,
       capture.height,
     );
-    return capture.toDataURL("image/jpeg", 0.8);
+    const scene = document.createElement("canvas");
+    scene.width = 48;
+    scene.height = 27;
+    const sceneContext = scene.getContext("2d", { willReadFrequently: true });
+    if (!sceneContext) return null;
+    sceneContext.drawImage(capture, 0, 0, scene.width, scene.height);
+    const pixels = sceneContext.getImageData(0, 0, scene.width, scene.height).data;
+    const signature = new Uint8Array(scene.width * scene.height);
+    for (let index = 0; index < signature.length; index += 1) {
+      const pixel = index * 4;
+      signature[index] = Math.round((pixels[pixel] * 0.3) + (pixels[pixel + 1] * 0.59) + (pixels[pixel + 2] * 0.11));
+    }
+    return { image: capture.toDataURL("image/jpeg", 0.8), signature };
   };
 
   const analyzeVisionFrame = async (manual = false) => {
     const current = stateRef.current;
     if (visionBusyRef.current || current.status === "待制作" || current.status === "已完成") return;
-    const image = captureVisionFrame();
-    if (!image) return;
+    const frame = captureVisionFrame();
+    if (!frame) return;
+    const now = Date.now();
+    const previousScene = visionLastSceneRef.current;
+    const sceneDifference = previousScene
+      ? frame.signature.reduce((total, value, index) => total + Math.abs(value - previousScene[index]), 0) / frame.signature.length
+      : Infinity;
+    const dueForSafetyCheck = now - visionLastRequestRef.current >= VISION_STABLE_RECHECK;
+    if (!manual && (now - visionLastRequestRef.current < VISION_MIN_GAP || (sceneDifference < 12 && !dueForSafetyCheck))) return;
 
     visionBusyRef.current = true;
+    visionLastRequestRef.current = now;
+    visionLastSceneRef.current = frame.signature;
     setVisionState("识别中");
+    setVisionError(null);
     try {
       const response = await fetch("/api/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image,
+          image: frame.image,
           expectedStep: steps[current.stepIndex],
           order: { id: "A102", drink: "云朵乌龙奶茶", options: ["少糖", "去冰", "加珍珠"] },
           mode: current.stepIndex === steps.length - 1 ? "label" : "operation",
@@ -304,17 +357,22 @@ export default function Home() {
 
       visionAvailableRef.current = true;
       setVisionObservation(result);
-      if (result.event !== "unknown" && result.confidence >= 0.85) {
+      const observedEvent = current.stepIndex === steps.length - 1 && result.ticket?.matchesCurrentOrder === false
+        ? "wrongLabel"
+        : result.event;
+      if (observedEvent !== "unknown" && result.confidence >= 0.85) {
         setVisionState("视觉模型在线");
-        detectAction(result.event, "视觉模型");
+        detectAction(observedEvent, "视觉模型", result);
         return;
       }
       setVisionState("低置信度");
       if (manual) addEvent(`视觉模型待确认：${result.reason || "画面不够清晰"}`);
-    } catch {
-      if (visionAvailableRef.current === null) visionAvailableRef.current = false;
+    } catch (error) {
+      visionAvailableRef.current = false;
       setVisionState("服务异常");
-      if (manual) addEvent("视觉模型服务暂不可用");
+      const detail = error instanceof Error ? error.message : "视觉模型服务暂不可用";
+      setVisionError(detail);
+      if (manual) addEvent(`视觉模型服务异常：${detail}`);
     } finally {
       visionBusyRef.current = false;
     }
@@ -384,9 +442,17 @@ export default function Home() {
           </div>
           <p className="camera-hint">视觉模型会按关键步骤分析画面；置信度不足时不会推进订单。将当前物料或杯贴置于中央，避免其他物料干扰。</p>
           <div className="vision-tools">
-            <button onClick={() => void analyzeVisionFrame(true)} disabled={!cameraOn || status === "待制作" || status === "已完成" || visionState === "识别中"}>视觉识别一次</button>
-            {visionObservation && <span>最近结果：{visionObservation.event} · {Math.round(visionObservation.confidence * 100)}%</span>}
+            <button onClick={() => void analyzeVisionFrame(true)} disabled={!cameraOn || status === "待制作" || status === "已完成" || visionState === "识别中"}>{visionState === "服务异常" ? "重新尝试识别" : "视觉识别一次"}</button>
+            <span>{visionObservation ? `最近结果：${visionObservation.event} · ${Math.round(visionObservation.confidence * 100)}%` : "画面变化触发 · 最长 7 秒复检"}</span>
           </div>
+          {visionError && <p className="vision-error">服务暂不可用：{visionError}</p>}
+          {visionObservation?.ticket && (
+            <div className={`ticket-check ${visionObservation.ticket.matchesCurrentOrder === true ? "match" : visionObservation.ticket.matchesCurrentOrder === false ? "mismatch" : "pending"}`}>
+              <div><b>订单 / 杯贴识别</b><span>{visionObservation.ticket.matchesCurrentOrder === true ? "匹配" : visionObservation.ticket.matchesCurrentOrder === false ? "不匹配" : "待确认"}</span></div>
+              <p>{visionObservation.ticket.orderId ?? "未读出订单号"} · {visionObservation.ticket.drink ?? "未读出饮品"}</p>
+              <small>{[visionObservation.ticket.sugar, visionObservation.ticket.ice, visionObservation.ticket.topping].filter(Boolean).join(" / ") || "未读出定制项"}</small>
+            </div>
+          )}
           <details className="demo-controls">
             <summary>打开演示兜底控制</summary>
             <div className="markers">
@@ -404,7 +470,7 @@ export default function Home() {
           <div className="agent-actions">
             <button onClick={() => speak(expectedStep?.prompt ?? "订单已完成")}>重复当前提示</button>
           </div>
-          <div className="privacy-note">🔒 默认不连续保存视频。仅在异常时保留事件前后 10 秒片段。</div>
+          <div className="privacy-note">🔒 仅在画面变化或定时复检时上传关键帧；默认不连续保存视频，仅在异常时保留事件前后 10 秒片段。</div>
         </article>
 
         <article className="card metrics-card">
@@ -415,7 +481,11 @@ export default function Home() {
             <div><strong>{autoCorrections}</strong><span>自动纠正</span></div>
           </div>
           <div className="event-clip"><div><b>{clipReady ? "异常片段已就绪" : anomalies ? "正在补全异常后片段" : "暂无异常事件片段"}</b><span>{clipReady ? "已保留取料前后完整上下文" : "默认仅在内存中滚动缓存"}</span></div>{clipReady && clipUrl && <a href={clipUrl} download="A102-event.webm">下载片段</a>}</div>
-          <div className="timeline"><b className="timeline-title">异常记录</b>{events.length ? events.map((event, index) => <p key={`${event}-${index}`}><i />{event}</p>) : <p className="muted">开始订单后将显示结构化事件。</p>}</div>
+          <div className="timeline">
+            <b className="timeline-title">异常复盘</b>
+            {anomalyRecords.length ? anomalyRecords.map((record) => <div className="anomaly-record" key={record.id}><p><i />{record.at} · {record.event}</p><span>{record.confidence ? `模型置信度 ${Math.round(record.confidence * 100)}%` : "本地演示识别"} · {record.corrected ? `已自动纠正：${record.correction}` : "待纠正"}</span></div>) : <p className="muted">暂无异常；异常会自动记录识别依据与纠正结果。</p>}
+            {events.slice(0, 3).map((event, index) => <p className="flow-event" key={`${event}-${index}`}><i />{event}</p>)}
+          </div>
         </article>
       </section>
     </main>
