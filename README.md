@@ -1,100 +1,92 @@
-# vinext-starter
+# 杯序 CupFlow
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+> 面向奶茶店新人店员的 AI 眼镜工作流智能体。
 
-## Prerequisites
+CupFlow 以第一视角视觉感知、订单状态机和语音提示协同工作：它理解当前订单与制作步骤，在出现错料、重复加料、超量或杯贴不匹配时即时提醒；店员完成纠正后，系统自动进入下一步，并保留可复盘的异常记录。
 
-- Node.js `>=22.13.0`
+## 核心能力
 
-## Quick Start
+- **订单驱动流程引导**：以 A102 定制订单为例，完成取杯、加茶底、加小料、定量、封杯和杯贴核验。
+- **视觉模型识别**：服务端调用兼容 OpenAI 的视觉模型接口，识别制作台关键操作与杯贴信息。
+- **低打扰提示与自动纠错**：仅在关键节点播报；识别到纠正动作后无需再次手动确认。
+- **异常记录与回放线索**：记录异常类型、订单状态和纠正结果，支持培训复盘。
+- **AI 眼镜工作流**：当前 Web 原型承载第一视角输入与控制台，产品目标终端为 AI 眼镜。
+
+## 技术架构
+
+```text
+AI 眼镜第一视角 / 摄像头
+          ↓
+    CupFlow Web Agent
+          ↓
+视觉模型 API + 订单流程状态机
+          ↓
+语音提示 / 异常警报 / 自动纠错 / 复盘记录
+```
+
+## 快速开始
+
+### 1. 环境要求
+
+- Node.js 22.13 或更高版本
+
+### 2. 安装并配置
 
 ```bash
 npm install
+cp .env.example .env.local
+```
+
+编辑 `.env.local`，填入你的视觉模型服务配置：
+
+```dotenv
+VISION_API_BASE_URL=https://your-provider.example/compatible-mode/v1
+VISION_API_KEY=your_server_side_key
+VISION_MODEL=qwen3-vl-flash
+```
+
+`.env.local` 已被 Git 忽略，**不要将 API Key 提交到仓库**。
+
+### 3. 启动
+
+```bash
 npm run dev
+```
+
+打开 [http://localhost:3000](http://localhost:3000)，授权摄像头，点击“开始订单”，再使用“视觉识别一次”或等待自动识别。
+
+### 4. 验证构建
+
+```bash
 npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+## 演示建议
 
-## Included Shape
+目标订单为「云朵乌龙奶茶｜少糖｜去冰｜加珍珠」。建议依次演示：
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+1. 正确取杯、加茶底与加珍珠，观察步骤自动推进；
+2. 故意放入错误小料，观察警报；
+3. 放回错误物料并完成正确动作，观察自动纠错；
+4. 展示错误杯贴，观察订单不匹配提示与事件记录；
+5. 完成封杯与正确杯贴核验。
 
-## Workspace Auth Headers
+## 项目结构
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```text
+app/page.tsx              # CupFlow 前端与工作流状态机
+app/api/vision/route.ts   # 服务端视觉模型调用与结构化解析
+app/globals.css           # 界面样式
+electron/                 # Windows 便携桌面版打包入口
+.env.example              # 无密钥配置模板
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## 数据与隐私
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+- API Key 仅由服务端读取，不会发送到浏览器。
+- 原型仅应使用演示订单与经授权的制作台画面。
+- 低置信度的视觉结果不应直接推进订单，应由店员复核。
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## 赛事定位
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+CupFlow 为 GOAI Boundless Agents 赛道原型。它不替代店员，而是在高频、强流程、培训成本高的餐饮制作场景中提供可解释、可纠错的实时工作流支持。

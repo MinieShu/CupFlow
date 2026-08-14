@@ -40,3 +40,4 @@ yarn-error.log*
 /work/
 /.playwright-cli/
 /release/
+/output/

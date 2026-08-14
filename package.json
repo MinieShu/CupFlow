@@ -1,5 +1,5 @@
 {
-  "name": "site-creator-vinext-starter",
+  "name": "cupflow",
   "version": "0.1.0",
   "private": true,
   "main": "electron/main.cjs",
@@ -10,14 +10,12 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev --host 0.0.0.0",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate",
     "desktop:dev": "electron .",
     "desktop:build": "npm run build && electron-builder --win portable --x64"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.2",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -31,7 +29,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "electron": "^40.4.1",
     "electron-builder": "^26.8.1",
     "eslint": "9.39.4",
