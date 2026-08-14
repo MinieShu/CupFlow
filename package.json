@@ -2,6 +2,7 @@
   "name": "site-creator-vinext-starter",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -11,7 +12,9 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "desktop:dev": "electron .",
+    "desktop:build": "npm run build && electron-builder --win portable --x64"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -29,6 +32,8 @@
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
+    "electron": "^40.4.1",
+    "electron-builder": "^26.8.1",
     "eslint": "9.39.4",
     "eslint-plugin-jsx-a11y": "6.10.2",
     "eslint-plugin-react": "7.37.5",
@@ -41,6 +46,30 @@
     "vinext": "1.0.0-beta.2",
     "vite": "8.0.13",
     "wrangler": "4.92.0"
+  },
+  "build": {
+    "appId": "com.cupflow.milktea",
+    "productName": "CupFlow",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "app/**/*",
+      "build/**/*",
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "CupFlow-Windows-Portable.exe"
+    }
   },
   "type": "module"
 }
