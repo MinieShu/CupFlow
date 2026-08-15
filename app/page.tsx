@@ -7,9 +7,12 @@ type OrderStatus = "待制作" | "制作中" | "异常待复核" | "已完成";
 type AnomalyKind = "wrongIngredient" | "extraPearls" | "overfill" | "sequence" | "wrongLabel" | null;
 type VisionState = "未检测" | "识别中" | "视觉模型在线" | "低置信度" | "演示兜底" | "服务异常";
 type Ticket = { orderId?: string | null; drink?: string | null; sugar?: string | null; ice?: string | null; topping?: string | null; matchesCurrentOrder?: boolean | null };
-type VisionObservation = { event: Action | "unknown"; confidence: number; reason: string; ticket?: Ticket | null };
+type VisionMeta = { traceId: string; model: string; durationMs: number; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null; estimatedCostCny?: number | null; dataPolicy: string };
+type VisionObservation = { event: Action | "unknown"; confidence: number; reason: string; ticket?: Ticket | null; meta?: VisionMeta };
 type AnomalyRecord = { id: string; at: string; event: string; confidence?: number; corrected: boolean; correction?: string };
 type DetectionMeta = { confidence?: number; reason?: string; ticket?: Ticket | null };
+type AgentDecision = { outcome: "advance" | "hold" | "review"; action: Action | "unknown"; reason: string; requiresHumanApproval: boolean; anomaly: Exclude<AnomalyKind, null> | null; confidenceThreshold: number };
+type AgentTrace = { traceId: string; tools: string[]; sources: Array<{ title: string; source: string }>; decision: AgentDecision };
 
 const VISION_MIN_GAP = 2_400;
 const VISION_STABLE_RECHECK = 7_000;
@@ -57,6 +60,9 @@ export default function Home() {
   const visionLastRequestRef = useRef(0);
   const visionLastSceneRef = useRef<Uint8Array | null>(null);
   const lastAnomalyRecordRef = useRef<string | null>(null);
+  const stableObservationRef = useRef<{ event: Action | "unknown"; count: number; at: number }>({ event: "unknown", count: 0, at: 0 });
+  const sessionIdRef = useRef(typeof crypto !== "undefined" ? crypto.randomUUID() : `session-${Date.now()}`);
+  const approvalRequiredRef = useRef(false);
   const stateRef = useRef<{ status: OrderStatus; stepIndex: number; pendingAnomaly: AnomalyKind }>({ status: "待制作", stepIndex: 0, pendingAnomaly: null });
 
   const [cameraOn, setCameraOn] = useState(false);
@@ -75,6 +81,9 @@ export default function Home() {
   const [visionObservation, setVisionObservation] = useState<VisionObservation | null>(null);
   const [visionError, setVisionError] = useState<string | null>(null);
   const [anomalyRecords, setAnomalyRecords] = useState<AnomalyRecord[]>([]);
+  const [agentTrace, setAgentTrace] = useState<AgentTrace | null>(null);
+  const [approvalRequired, setApprovalRequired] = useState(false);
+  const [voiceState, setVoiceState] = useState<"未启用" | "监听中" | "不可用">("未启用");
 
   useEffect(() => {
     stateRef.current = { status, stepIndex, pendingAnomaly };
@@ -107,12 +116,14 @@ export default function Home() {
     }, 10_000);
   };
 
-  const raiseAnomaly = (kind: Exclude<AnomalyKind, null>, alert: string, event: string, meta: DetectionMeta = {}) => {
+  const raiseAnomaly = (kind: Exclude<AnomalyKind, null>, alert: string, event: string, meta: DetectionMeta = {}, requiresApproval = false) => {
     const recordId = `${Date.now()}-${kind}`;
     lastAnomalyRecordRef.current = recordId;
     stateRef.current = { ...stateRef.current, status: "异常待复核", pendingAnomaly: kind };
     setStatus("异常待复核");
     setPendingAnomaly(kind);
+    approvalRequiredRef.current = requiresApproval;
+    setApprovalRequired(requiresApproval);
     setAnomalies((value) => value + 1);
     setMessage(alert);
     addEvent(`异常：${event}`);
@@ -135,12 +146,16 @@ export default function Home() {
     setAnomalies(0);
     setAutoCorrections(0);
     setPendingAnomaly(null);
+    approvalRequiredRef.current = false;
+    setApprovalRequired(false);
     setAnomalyRecords([]);
     setVisionObservation(null);
     setVisionError(null);
     visionLastSceneRef.current = null;
     visionLastRequestRef.current = 0;
     lastAnomalyRecordRef.current = null;
+    stableObservationRef.current = { event: "unknown", count: 0, at: 0 };
+    setAgentTrace(null);
     setEvents(["订单 A102 已下发：少糖、去冰、加珍珠"]);
     setStartedAt(Date.now());
     setMessage(steps[0].prompt);
@@ -161,6 +176,11 @@ export default function Home() {
         (current.pendingAnomaly === "sequence" && id === steps[current.stepIndex]?.id) ||
         (current.pendingAnomaly === "wrongLabel" && id === "label");
       if (!correctionMatches) return;
+      if (approvalRequiredRef.current) {
+        setMessage("纠正动作已识别，仍需店员人工复核后才能继续。");
+        speak("纠正动作已识别，请人工复核后继续。");
+        return;
+      }
 
       const correction = {
         wrongIngredient: "已识别正确原料",
@@ -174,6 +194,7 @@ export default function Home() {
       setAutoCorrections((value) => value + 1);
       setStatus("制作中");
       setPendingAnomaly(null);
+      setApprovalRequired(false);
       addEvent(`自动纠正：${correction}`);
       if (lastAnomalyRecordRef.current) {
         const recordId = lastAnomalyRecordRef.current;
@@ -317,6 +338,80 @@ export default function Home() {
     return { image: capture.toDataURL("image/jpeg", 0.8), signature };
   };
 
+  const isTemporallyStable = (event: Action | "unknown") => {
+    const now = Date.now();
+    const previous = stableObservationRef.current;
+    const count = previous.event === event && now - previous.at < 6_000 ? previous.count + 1 : 1;
+    stableObservationRef.current = { event, count, at: now };
+    return count >= 2;
+  };
+
+  const requestAgentDecision = async (observation: VisionObservation) => {
+    const current = stateRef.current;
+    const response = await fetch("/api/agent/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: sessionIdRef.current,
+        order: { id: "A102", drink: "云朵乌龙奶茶", options: ["少糖", "去冰", "加珍珠"] },
+        expectedStep: steps[current.stepIndex],
+        stepIndex: current.stepIndex,
+        observation,
+        recentEvents: events.slice(0, 8),
+      }),
+    });
+    const result = await response.json() as { decision?: AgentDecision; trace?: AgentTrace; message?: string };
+    if (!response.ok || !result.decision || !result.trace) throw new Error(result.message ?? "Agent 工作流响应异常");
+    setAgentTrace(result.trace);
+    return result.decision;
+  };
+
+  const approveHighRisk = () => {
+    const current = stateRef.current;
+    if (!approvalRequiredRef.current || current.status !== "异常待复核") return;
+    approvalRequiredRef.current = false;
+    setApprovalRequired(false);
+    stateRef.current = { ...current, status: "制作中", pendingAnomaly: null };
+    setStatus("制作中");
+    setPendingAnomaly(null);
+    if (lastAnomalyRecordRef.current) {
+      const recordId = lastAnomalyRecordRef.current;
+      setAnomalyRecords((records) => records.map((record) => record.id === recordId ? { ...record, corrected: true, correction: "店员已人工复核" } : record));
+      lastAnomalyRecordRef.current = null;
+    }
+    addEvent("人工复核：高风险异常已确认处理");
+    const expected = steps[current.stepIndex];
+    setMessage(`人工复核通过。${expected?.prompt ?? "请继续制作。"}`);
+    speak(`人工复核通过。${expected?.prompt ?? "请继续制作。"}`);
+  };
+
+  const startVoiceControl = () => {
+    type BrowserRecognition = { lang: string; continuous: boolean; interimResults: boolean; start: () => void; onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
+    const SpeechRecognition = (window as typeof window & { SpeechRecognition?: new () => BrowserRecognition; webkitSpeechRecognition?: new () => BrowserRecognition }).SpeechRecognition
+      ?? (window as typeof window & { webkitSpeechRecognition?: new () => BrowserRecognition }).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceState("不可用");
+      setMessage("当前浏览器不支持语音指令，可继续使用语音播报和页面控制。");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "zh-CN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const command = event.results[0]?.[0]?.transcript.replace(/\s/g, "") ?? "";
+      if (command.includes("开始订单") || command.includes("重新开始")) startOrder();
+      else if (command.includes("重复") || command.includes("再说一遍")) speak(expectedStep?.prompt ?? message);
+      else if (command.includes("确认复核") || command.includes("人工确认")) approveHighRisk();
+      else if (command.includes("继续") && approvalRequired) approveHighRisk();
+      else speak("未识别该指令。可说开始订单、重复提示或确认复核。");
+    };
+    recognition.onend = () => setVoiceState("未启用");
+    recognition.onerror = () => setVoiceState("未启用");
+    setVoiceState("监听中");
+    recognition.start();
+  };
+
   const analyzeVisionFrame = async (manual = false) => {
     const current = stateRef.current;
     if (visionBusyRef.current || current.status === "待制作" || current.status === "已完成") return;
@@ -360,13 +455,31 @@ export default function Home() {
       const observedEvent = current.stepIndex === steps.length - 1 && result.ticket?.matchesCurrentOrder === false
         ? "wrongLabel"
         : result.event;
-      if (observedEvent !== "unknown" && result.confidence >= 0.85) {
+      const observation = { ...result, event: observedEvent };
+      const decision = await requestAgentDecision(observation);
+      if (decision.outcome === "hold") {
+        setVisionState("低置信度");
+        if (manual) addEvent(`Agent 保持当前步骤：${decision.reason}`);
+        return;
+      }
+      if (decision.outcome === "review" && decision.anomaly) {
+        const alert = decision.requiresHumanApproval
+          ? `${decision.reason} 请完成纠正后，由店员确认复核。`
+          : decision.reason;
+        raiseAnomaly(decision.anomaly, alert, decision.reason, observation, decision.requiresHumanApproval);
         setVisionState("视觉模型在线");
-        detectAction(observedEvent, "视觉模型", result);
+        return;
+      }
+      if (decision.outcome === "advance" && observedEvent !== "unknown") {
+        setVisionState("视觉模型在线");
+        if (isTemporallyStable(observedEvent)) {
+          detectAction(observedEvent, "视觉模型", observation);
+        } else if (manual) {
+          addEvent("视觉证据已通过策略校验，等待连续帧确认后推进");
+        }
         return;
       }
       setVisionState("低置信度");
-      if (manual) addEvent(`视觉模型待确认：${result.reason || "画面不够清晰"}`);
     } catch (error) {
       visionAvailableRef.current = false;
       setVisionState("服务异常");
@@ -469,8 +582,10 @@ export default function Home() {
           <div className="current-check">当前核验：<b>{expectedStep?.title ?? "订单已完成"}</b></div>
           <div className="agent-actions">
             <button onClick={() => speak(expectedStep?.prompt ?? "订单已完成")}>重复当前提示</button>
+            <button onClick={startVoiceControl} disabled={voiceState === "监听中"}>{voiceState === "监听中" ? "正在监听语音指令…" : "语音指令"}</button>
+            {approvalRequired && <button className="approval-action" onClick={approveHighRisk}>人工复核并继续</button>}
           </div>
-          <div className="privacy-note">🔒 仅在画面变化或定时复检时上传关键帧；默认不连续保存视频，仅在异常时保留事件前后 10 秒片段。</div>
+          <div className="privacy-note">🔒 仅在画面变化或定时复检时上传关键帧；默认不连续保存视频，仅在异常时保留事件前后 10 秒片段。高风险异常必须人工复核。</div>
         </article>
 
         <article className="card metrics-card">
@@ -483,6 +598,7 @@ export default function Home() {
           <div className="event-clip"><div><b>{clipReady ? "异常片段已就绪" : anomalies ? "正在补全异常后片段" : "暂无异常事件片段"}</b><span>{clipReady ? "已保留取料前后完整上下文" : "默认仅在内存中滚动缓存"}</span></div>{clipReady && clipUrl && <a href={clipUrl} download="A102-event.webm">下载片段</a>}</div>
           <div className="timeline">
             <b className="timeline-title">异常复盘</b>
+            {agentTrace && <div className="agent-trace"><p><i />Trace {agentTrace.traceId.slice(0, 8)} · {agentTrace.decision.outcome === "advance" ? "通过策略校验" : agentTrace.decision.outcome === "review" ? "进入风险复核" : "保持当前步骤"}</p><span>工具：{agentTrace.tools.join(" → ")} · 依据：{agentTrace.sources.map((source) => source.title).join("、")}{visionObservation?.meta ? ` · ${visionObservation.meta.durationMs}ms${visionObservation.meta.usage?.total_tokens ? ` · ${visionObservation.meta.usage.total_tokens} tokens` : ""}${visionObservation.meta.estimatedCostCny !== null && visionObservation.meta.estimatedCostCny !== undefined ? ` · 估算 ¥${visionObservation.meta.estimatedCostCny}` : ""}` : ""}</span></div>}
             {anomalyRecords.length ? anomalyRecords.map((record) => <div className="anomaly-record" key={record.id}><p><i />{record.at} · {record.event}</p><span>{record.confidence ? `模型置信度 ${Math.round(record.confidence * 100)}%` : "本地演示识别"} · {record.corrected ? `已自动纠正：${record.correction}` : "待纠正"}</span></div>) : <p className="muted">暂无异常；异常会自动记录识别依据与纠正结果。</p>}
             {events.slice(0, 3).map((event, index) => <p className="flow-event" key={`${event}-${index}`}><i />{event}</p>)}
           </div>

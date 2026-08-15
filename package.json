@@ -16,6 +16,8 @@
     "desktop:build": "npm run build && electron-builder --win portable --x64"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.8",
+    "@langchain/langgraph": "^1.4.10",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -68,5 +70,8 @@
       "artifactName": "CupFlow-Windows-Portable.exe"
     }
   },
-  "type": "module"
+  "type": "module",
+  "overrides": {
+    "ws": "^8.21.0"
+  }
 }
