@@ -22,6 +22,7 @@ CupFlow 是面向奶茶店单工位制作流程的 AI 眼镜工作流 Agent 原�
 | 安全策略 | `evaluateObservation` | 默认不推进；低置信度保持当前步骤；超量和杯贴不匹配必须人工复核。 |
 | 上下文管理 | 会话 ID、当前订单、当前步骤、最近事件 | 仅传递完成当次决策所需的最小上下文；本版本不做跨会话持久化。 |
 | Trace | `traceId`、工具列表、知识来源、策略结果、模型耗时与 token 用量 | 用于 Demo 复盘和评测，不包含原始图像或 API Key。 |
+| 多订单派单 | `lib/dispatch.ts` | 提供独立的半自动推荐与空闲员工自动派送 API；当前不接入比赛 Demo 页面。 |
 
 ## 模型边界
 
@@ -38,5 +39,6 @@ CupFlow 是面向奶茶店单工位制作流程的 AI 眼镜工作流 Agent 原�
 - `POST /api/vision`：接收单帧图像，输出结构化视觉观察结果。
 - `POST /api/agent/decision`：接收订单、当前步骤和视觉观察，输出 Agent 决策及 Trace。
 - `GET /api/agent/evaluate`：运行确定性策略评测套件。
+- `/api/dispatch/*`：订单队列、半自动推荐、自动派送、订单完成与派单评测。
 
 生产部署时应将视觉模型 Key 放入部署平台的服务端 Secret，不得写入浏览器、仓库或演示视频。

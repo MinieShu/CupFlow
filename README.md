@@ -13,6 +13,7 @@ CupFlow 以第一视角视觉感知、订单状态机和语音提示协同工作
 - **AI 眼镜工作流**：当前 Web 原型承载第一视角输入与控制台，产品目标终端为 AI 眼镜。
 - **可审计 Agent 核心**：LangGraph 编排订单上下文、配方检索和策略判断；每次决策返回工具、依据与 Trace。
 - **安全与成本治理**：连续帧确认、人工复核、提示注入防护、关键帧节流和 token/耗时统计。
+- **派单服务模块**：支持半自动推荐与空闲员工自动派送；当前作为独立 API，不影响单订单演示。
 
 ## 技术架构
 
@@ -94,6 +95,7 @@ electron/                 # Windows 便携桌面版打包入口
 - [Agent 架构说明](docs/ARCHITECTURE.md)
 - [数据来源与合规说明](docs/COMPLIANCE.md)
 - [评测与成本治理](docs/EVALUATION.md)
+- [多人派单模块](docs/DISPATCH.md)
 - [MIT License](LICENSE)
 
 ## 赛事定位
