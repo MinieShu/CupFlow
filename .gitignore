@@ -43,4 +43,5 @@ yarn-error.log*
 /output/
 /android-glasses/local.properties
 /android-glasses/.gradle/
+/android-glasses/build/
 /android-glasses/app/build/

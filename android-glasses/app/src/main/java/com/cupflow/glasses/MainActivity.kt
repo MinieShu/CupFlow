@@ -1,15 +1,14 @@
 package com.cupflow.glasses
 
 import android.Manifest
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.toBitmap
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
@@ -22,6 +21,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.io.File
 
 class MainActivity : ComponentActivity() {
   private var imageCapture: ImageCapture? = null
@@ -55,10 +55,16 @@ class MainActivity : ComponentActivity() {
             status = "摄像头尚未就绪"
           } else {
             status = "正在分析关键帧…"
-            capture.takePicture(executor, object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-              val bitmap = image.toBitmap()
-              image.close()
+            val imageFile = File.createTempFile("cupflow-keyframe-", ".jpg", cacheDir)
+            val output = ImageCapture.OutputFileOptions.Builder(imageFile).build()
+            capture.takePicture(output, executor, object : ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+              val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
+              imageFile.delete()
+              if (bitmap == null) {
+                runOnUiThread { status = "无法读取刚才拍摄的画面" }
+                return
+              }
               executor.execute {
                 runCatching { AgentClient(AgentConfig(host)).inspect(bitmap) }
                   .onSuccess { result -> runOnUiThread {
@@ -80,7 +86,8 @@ class MainActivity : ComponentActivity() {
   @Composable
   private fun CameraPreview(modifier: Modifier) {
     val context = LocalContext.current
-    AndroidView(modifier = modifier, factory = { previewView ->
+    AndroidView(modifier = modifier, factory = { viewContext ->
+      PreviewView(viewContext).also { previewView ->
       val providerFuture = ProcessCameraProvider.getInstance(context)
       providerFuture.addListener({
         val provider = providerFuture.get()
@@ -89,7 +96,7 @@ class MainActivity : ComponentActivity() {
         provider.unbindAll()
         provider.bindToLifecycle(this@MainActivity, androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
       }, ContextCompat.getMainExecutor(context))
-      previewView
+      }
     })
   }
 }
