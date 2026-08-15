@@ -23,6 +23,7 @@ CupFlow 是面向奶茶店单工位制作流程的 AI 眼镜工作流 Agent 原�
 | 上下文管理 | 会话 ID、当前订单、当前步骤、最近事件 | 仅传递完成当次决策所需的最小上下文；本版本不做跨会话持久化。 |
 | Trace | `traceId`、工具列表、知识来源、策略结果、模型耗时与 token 用量 | 用于 Demo 复盘和评测，不包含原始图像或 API Key。 |
 | 多订单派单 | `lib/dispatch.ts` | 提供独立的半自动推荐与空闲员工自动派送 API；当前不接入比赛 Demo 页面。 |
+| Android 眼镜采集端 | `android-glasses/` | 以 CameraX 获取关键帧、调用服务端 API、显示短提示并使用 TTS 播报；不保存模型 Key。 |
 
 ## 模型边界
 

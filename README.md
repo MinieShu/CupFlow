@@ -96,6 +96,8 @@ electron/                 # Windows 便携桌面版打包入口
 - [数据来源与合规说明](docs/COMPLIANCE.md)
 - [评测与成本治理](docs/EVALUATION.md)
 - [多人派单模块](docs/DISPATCH.md)
+- [Android 眼镜采集端](android-glasses/README.md)
+- [AI 眼镜部署说明](docs/GLASSES_DEPLOYMENT.md)
 - [MIT License](LICENSE)
 
 ## 赛事定位

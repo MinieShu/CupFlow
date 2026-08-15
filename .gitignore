@@ -41,3 +41,6 @@ yarn-error.log*
 /.playwright-cli/
 /release/
 /output/
+/android-glasses/local.properties
+/android-glasses/.gradle/
+/android-glasses/app/build/
