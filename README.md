@@ -48,7 +48,6 @@ VISION_API_KEY=your_server_side_key
 VISION_MODEL=qwen3-vl-flash
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)，授权摄像头后开始订单。API Key 只由服务端读取；不要提交 `.env.local`。
 
 ### 构建检查
 
