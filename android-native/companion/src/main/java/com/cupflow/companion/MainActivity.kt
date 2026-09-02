@@ -316,7 +316,7 @@ class MainActivity : Activity() {
                                 if (currentOrder != null) {
                                     productionStarted = true
                                     render("已开始制作：等待${currentRecipe?.steps?.getOrNull(stepIndex)?.title.orEmpty()}。")
-                                    evaluateLatestFrame()
+                                    startAutoRecognition()
                                 }
                             }
                             "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
