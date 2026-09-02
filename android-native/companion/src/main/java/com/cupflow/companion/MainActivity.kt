@@ -18,12 +18,14 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
+import com.rokid.cxr.link.callbacks.IAudioStreamCbk
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk
 import com.rokid.cxr.link.callbacks.ICustomCmdCbk
 import com.rokid.cxr.link.callbacks.IImageStreamCbk
 import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
+import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -38,9 +40,12 @@ class MainActivity : Activity() {
     private val recipeManagementRequest = 4103
     private val executor = Executors.newSingleThreadExecutor()
     private val frameExecutor = Executors.newSingleThreadExecutor()
+    private val speechExecutor = Executors.newSingleThreadExecutor()
     private val visionSettings by lazy { VisionSettingsStore(this) }
     private val vision by lazy { VisionClient { visionSettings.endpoint() } }
+    private val speech by lazy { SpeechClient { visionSettings.speechEndpoint() } }
     private val frames = ArrayDeque<CapturedFrame>()
+    private val voiceBuffer = ByteArrayOutputStream()
     private val recipeStore by lazy { RecipeStore(this) }
     private val ingredientGridStore by lazy { IngredientGridStore(this) }
     private val decisionLogStore by lazy { DecisionLogStore(this) }
@@ -70,6 +75,8 @@ class MainActivity : Activity() {
     private var visionHealth = "等待视觉服务检查"
     private var authorizationPending = false
     private var authorizationRequestedAt = 0L
+    private var voiceCaptureActive = false
+    private var voiceCaptureSession = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,6 +90,7 @@ class MainActivity : Activity() {
         (application as CupFlowCompanionApplication).cxrLink?.disconnect()
         executor.shutdownNow()
         frameExecutor.shutdownNow()
+        speechExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -181,7 +189,13 @@ class MainActivity : Activity() {
         authorizationPending = true
         authorizationRequestedAt = System.currentTimeMillis()
         render("正在打开 Rokid AI App 授权…请在其中允许 CupFlow。")
-        runCatching { AuthorizationHelper.requestAuthorization(this, null, authRequest) }
+        runCatching {
+            AuthorizationHelper.requestAuthorization(
+                this,
+                arrayOf(GlassPermission.CAMERA, GlassPermission.MEDIA, GlassPermission.MICROPHONE),
+                authRequest,
+            )
+        }
             .onFailure {
                 authorizationPending = false
                 render("无法发起 Rokid 授权：${it.message.orEmpty().take(48)}")
@@ -261,6 +275,30 @@ class MainActivity : Activity() {
                     render("眼镜拍照失败：$code ${msg.orEmpty()}")
                 }
             })
+            setCXRAudioCbk(object : IAudioStreamCbk {
+                override fun onAudioReceived(data: ByteArray, offset: Int, length: Int) {
+                    if (!voiceCaptureActive || length <= 0 || offset !in 0..data.size) return
+                    val safeLength = length.coerceAtMost(data.size - offset)
+                    if (safeLength <= 0) return
+                    synchronized(voiceBuffer) {
+                        if (voiceBuffer.size() < MAX_VOICE_PCM_BYTES) {
+                            val accepted = safeLength.coerceAtMost(MAX_VOICE_PCM_BYTES - voiceBuffer.size())
+                            voiceBuffer.write(data, offset, accepted)
+                        }
+                    }
+                }
+
+                override fun onAudioError(code: Int, msg: String?) {
+                    runOnUiThread {
+                        if (voiceCaptureActive) {
+                            stopGlassesVoiceCapture()
+                            sendVoiceResult("error", "眼镜麦克风不可用，请轻触开始。")
+                        }
+                    }
+                }
+
+                override fun onAudioStreamStateChanged(started: Boolean) {}
+            })
             setCXRCustomCmdCbk(object : ICustomCmdCbk {
                 override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
                     if (key != "cupflow_to_phone") return
@@ -282,6 +320,8 @@ class MainActivity : Activity() {
                                 }
                             }
                             "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
+                            "cupflow_voice_start" -> startGlassesVoiceCapture()
+                            "cupflow_voice_stop" -> stopGlassesVoiceCapture()
                         }
                     }
                 }
@@ -607,6 +647,93 @@ class MainActivity : Activity() {
         startAutoRecognition()
     }
 
+    private fun startGlassesVoiceCapture() {
+        if (voiceCaptureActive || productionStarted || currentOrder == null) return
+        val link = (application as CupFlowCompanionApplication).cxrLink
+        if (!linkReady || link == null) {
+            sendVoiceResult("error", "眼镜未连接，无法使用语音开始。")
+            return
+        }
+        synchronized(voiceBuffer) { voiceBuffer.reset() }
+        voiceCaptureActive = true
+        val session = ++voiceCaptureSession
+        if (!link.startAudioStream(1)) {
+            voiceCaptureActive = false
+            sendVoiceResult("error", "眼镜麦克风未授权或不可用，请轻触开始。")
+            return
+        }
+        render("正在聆听眼镜语音…")
+        window.decorView.postDelayed({
+            if (voiceCaptureActive && session == voiceCaptureSession) finishGlassesVoiceCapture()
+        }, VOICE_CAPTURE_DURATION_MS)
+    }
+
+    private fun stopGlassesVoiceCapture() {
+        if (!voiceCaptureActive) return
+        voiceCaptureActive = false
+        voiceCaptureSession += 1
+        (application as CupFlowCompanionApplication).cxrLink?.stopAudioStream()
+    }
+
+    private fun finishGlassesVoiceCapture() {
+        if (!voiceCaptureActive) return
+        val link = (application as CupFlowCompanionApplication).cxrLink
+        voiceCaptureActive = false
+        link?.stopAudioStream()
+        val pcm = synchronized(voiceBuffer) { voiceBuffer.toByteArray().also { voiceBuffer.reset() } }
+        if (pcm.size < MIN_VOICE_PCM_BYTES) {
+            sendVoiceResult("retry", "未听清，请说“开始制作”。")
+            return
+        }
+        speechExecutor.execute {
+            try {
+                val result = speech.recognize(pcmToWav(pcm))
+                runOnUiThread {
+                    if (productionStarted) return@runOnUiThread
+                    if (result.isStart) {
+                        decisionLogStore.append(currentOrder, "语音启动", null, "语音开始", "眼镜语音：${result.transcript.take(80)}")
+                        sendVoiceResult("start", result.transcript)
+                    } else {
+                        sendVoiceResult("retry", "未听清，请说“开始制作”。")
+                    }
+                }
+            } catch (error: Exception) {
+                runOnUiThread { sendVoiceResult("error", "语音服务暂不可用，请轻触开始。") }
+            }
+        }
+    }
+
+    private fun sendVoiceResult(outcome: String, detail: String) {
+        (application as CupFlowCompanionApplication).cxrLink?.sendCustomCmd("cupflow_to_glass", Caps().apply {
+            write("cupflow_voice_result")
+            write(outcome)
+            write(detail.take(120))
+        })
+    }
+
+    private fun pcmToWav(pcm: ByteArray): ByteArray {
+        val output = ByteArrayOutputStream(44 + pcm.size)
+        fun writeText(value: String) = output.write(value.toByteArray(Charsets.US_ASCII))
+        fun writeLe(value: Int, bytes: Int) {
+            repeat(bytes) { offset -> output.write((value ushr (offset * 8)) and 0xff) }
+        }
+        val byteRate = VOICE_SAMPLE_RATE * VOICE_CHANNELS * VOICE_BITS_PER_SAMPLE / 8
+        writeText("RIFF")
+        writeLe(36 + pcm.size, 4)
+        writeText("WAVEfmt ")
+        writeLe(16, 4)
+        writeLe(1, 2)
+        writeLe(VOICE_CHANNELS, 2)
+        writeLe(VOICE_SAMPLE_RATE, 4)
+        writeLe(byteRate, 4)
+        writeLe(VOICE_CHANNELS * VOICE_BITS_PER_SAMPLE / 8, 2)
+        writeLe(VOICE_BITS_PER_SAMPLE, 2)
+        writeText("data")
+        writeLe(pcm.size, 4)
+        output.write(pcm)
+        return output.toByteArray()
+    }
+
     private fun advance(result: VisionResult) {
         val completedStep = currentRecipe?.steps?.getOrNull(stepIndex)?.title.orEmpty()
         stepIndex += 1
@@ -770,5 +897,11 @@ class MainActivity : Activity() {
 
     companion object {
         private const val AUTHORIZATION_TIMEOUT_MS = 12_000L
+        private const val VOICE_CAPTURE_DURATION_MS = 2_600L
+        private const val MAX_VOICE_PCM_BYTES = 320_000
+        private const val MIN_VOICE_PCM_BYTES = 1_600
+        private const val VOICE_SAMPLE_RATE = 16_000
+        private const val VOICE_CHANNELS = 1
+        private const val VOICE_BITS_PER_SAMPLE = 16
     }
 }

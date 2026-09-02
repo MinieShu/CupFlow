@@ -8,6 +8,10 @@ class VisionSettingsStore(context: Context) {
 
     fun endpoint(): String = preferences.getString(KEY_ENDPOINT, DEFAULT_ENDPOINT) ?: DEFAULT_ENDPOINT
 
+    fun speechEndpoint(): String = endpoint().let { endpoint ->
+        if (endpoint.endsWith("/api/vision")) endpoint.removeSuffix("vision") + "speech" else "$endpoint/api/speech"
+    }
+
     fun label(): String = if (endpoint() == DEFAULT_ENDPOINT) "USB 本地调试" else "HTTPS 服务"
 
     /** Returns an error message when the address is invalid; otherwise persists it. */
