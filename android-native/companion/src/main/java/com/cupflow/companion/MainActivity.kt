@@ -218,7 +218,7 @@ class MainActivity : Activity() {
         authorizationPending = true
         authorizationRequestedAt = System.currentTimeMillis()
         render("正在打开 Rokid AI App 授权…请在其中允许 CupFlow。")
-        runCatching {
+        val immediateResult = runCatching {
             AuthorizationHelper.requestAuthorization(
                 this,
                 arrayOf(GlassPermission.CAMERA, GlassPermission.MEDIA, GlassPermission.MICROPHONE),
@@ -230,6 +230,15 @@ class MainActivity : Activity() {
                 render("无法发起 Rokid 授权：${it.message.orEmpty().take(48)}")
                 return
             }
+            .getOrNull()
+        // The Rokid SDK returns an immediate Pair when it can reuse an existing grant,
+        // rather than invoking onActivityResult. Parse it so its in-process permission
+        // state is restored before CXRLink starts a camera request.
+        immediateResult?.let { result ->
+            authorizationPending = false
+            handleAuthorization(result.first, result.second)
+            return
+        }
         window.decorView.postDelayed({
             if (authorizationPending && System.currentTimeMillis() - authorizationRequestedAt >= AUTHORIZATION_TIMEOUT_MS) {
                 authorizationPending = false
@@ -257,6 +266,10 @@ class MainActivity : Activity() {
         authorizationPending = false
         when (val result = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
             is AuthResult.AuthSuccess -> {
+                if (!hasRequiredGlassesPermissions()) {
+                    render("Rokid 返回了授权令牌，但相机、媒体或麦克风权限未完整授予。请在 Rokid AI App 中重新允许 CupFlow。")
+                    return
+                }
                 (application as CupFlowCompanionApplication).token = result.token
                 AuthTokenStore(this).save(result.token)
                 connect(result.token)
