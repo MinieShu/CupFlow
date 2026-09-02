@@ -1,6 +1,7 @@
 package com.cupflow.companion
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -24,6 +25,7 @@ import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
@@ -40,8 +42,10 @@ class MainActivity : Activity() {
     private val frames = ArrayDeque<CapturedFrame>()
     private val recipeStore by lazy { RecipeStore(this) }
     private val ingredientGridStore by lazy { IngredientGridStore(this) }
+    private val decisionLogStore by lazy { DecisionLogStore(this) }
 
     private lateinit var status: TextView
+    private lateinit var healthText: TextView
     private lateinit var orderText: TextView
     private lateinit var procedureText: TextView
     private lateinit var glassesNameInput: EditText
@@ -51,6 +55,8 @@ class MainActivity : Activity() {
     private var stepIndex = 0
     private var productionStarted = false
     private var linkReady = false
+    private var cxrConnected = false
+    private var bluetoothConnected = false
     private var captureBusy = false
     private var analysisBusy = false
     private var exceptionSaving = false
@@ -59,6 +65,8 @@ class MainActivity : Activity() {
     private var latestFrame: CapturedFrame? = null
     private var latestFingerprint: IntArray? = null
     private var lastVisionFingerprint: IntArray? = null
+    private var lastFrameAt = 0L
+    private var visionHealth = "等待视觉服务检查"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,6 +96,14 @@ class MainActivity : Activity() {
         }
         body.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 18; bottomMargin = 14 })
 
+        val healthCard = card("运行状态", "连接异常时不会推进当前步骤，可重新连接后继续")
+        healthText = text("", 13f, 0xff39554b.toInt())
+        healthCard.addView(healthText)
+        healthCard.addView(button("重新连接眼镜") { reconnectGlasses() })
+        healthCard.addView(button("恢复当前订单识别") { resumeRecognition() })
+        healthCard.addView(button("查看识别决策日志") { startActivity(Intent(this, DecisionLogActivity::class.java)) })
+        body.addView(healthCard)
+
         val glassesCard = card("眼镜管理", "连接状态与操作员名称")
         glassesNameInput = EditText(this).apply { hint = "眼镜名称"; setText(glassesName) }
         glassesCard.addView(glassesNameInput)
@@ -101,6 +117,7 @@ class MainActivity : Activity() {
         orderCard.addView(orderText)
         orderCard.addView(procedureText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
         orderCard.addView(button("扫描杯贴并下发订单", true) { scanCupLabelFromPhone() })
+        orderCard.addView(button("导入 POS / JSON 订单") { importOrderFromJson() })
         orderCard.addView(button("重新下发当前订单") { currentOrder?.let(::dispatchOrder) ?: render("请先扫描杯贴。") })
         orderCard.addView(button("结束当前订单") { clearOrder() })
         body.addView(orderCard)
@@ -181,8 +198,8 @@ class MainActivity : Activity() {
         val link = CXRLink(this).apply {
             configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.cupflow.glass"))
             setCXRLinkCbk(object : ICXRLinkCbk {
-                override fun onCXRLConnected(connected: Boolean) { updateLinkReady(connected) }
-                override fun onGlassBtConnected(connected: Boolean) { updateLinkReady(connected) }
+                override fun onCXRLConnected(connected: Boolean) { cxrConnected = connected; updateLinkReady() }
+                override fun onGlassBtConnected(connected: Boolean) { bluetoothConnected = connected; updateLinkReady() }
                 override fun onGlassAiAssistStart() {}
                 override fun onGlassAiAssistStop() {}
             })
@@ -225,13 +242,71 @@ class MainActivity : Activity() {
         render("正在连接 Rokid 眼镜…")
     }
 
-    private fun updateLinkReady(connected: Boolean) = runOnUiThread {
-        linkReady = connected
-        render(if (connected) "● 眼镜已连接，等待眼镜端 CupFlow 启动。" else "○ 眼镜连接中断。")
+    private fun updateLinkReady() = runOnUiThread {
+        linkReady = cxrConnected || bluetoothConnected
+        if (!linkReady) autoLoop = false
+        render(if (linkReady) "● 眼镜已连接，等待眼镜端 CupFlow 启动。" else "○ 眼镜连接中断，当前步骤已保持。")
     }
 
     private fun scanCupLabelFromPhone() {
         startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE), phoneScanRequest)
+    }
+
+    private fun importOrderFromJson() {
+        val input = EditText(this).apply {
+            hint = "{\"id\":\"A102\",\"drink\":\"云朵乌龙奶茶\",\"options\":[\"少糖\",\"去冰\",\"加珍珠\"]}"
+            minLines = 5
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入订单")
+            .setMessage("用于 POS、Webhook 或导出文件适配。导入后由店长确认下发。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("核对并下发") { _, _ -> parseImportedOrder(input.text.toString()) }
+            .show()
+    }
+
+    private fun parseImportedOrder(raw: String) {
+        val order = runCatching {
+            val json = JSONObject(raw)
+            val id = json.optString("id").trim().take(32)
+            val drink = json.optString("drink").trim().take(64)
+            val options = json.optJSONArray("options")?.let { array ->
+                buildList { for (index in 0 until array.length()) array.optString(index).trim().take(24).takeIf { it.isNotBlank() }?.let(::add) }
+            }.orEmpty()
+            require(id.isNotBlank() && drink.isNotBlank()) { "订单必须包含 id 和 drink" }
+            CupOrder(id, drink, options)
+        }.getOrElse {
+            render("订单导入失败：${it.message ?: "JSON 格式无效"}。当前订单未改变。")
+            return
+        }
+        currentOrder = order
+        stepIndex = 0
+        productionStarted = false
+        useRecipeFor(order)
+        dispatchOrder(order)
+        decisionLogStore.append(order, "订单导入", null, "订单已下发", "已通过 POS / JSON 适配入口由店长确认下发")
+        render("已导入订单：${order.id} · ${order.drink}，请在眼镜开始制作。")
+    }
+
+    private fun reconnectGlasses() {
+        val token = (application as CupFlowCompanionApplication).token
+        if (token.isBlank()) requestAuthorization() else connect(token)
+    }
+
+    private fun resumeRecognition() {
+        if (!linkReady) {
+            render("眼镜未连接，无法恢复识别。")
+            return
+        }
+        if (currentOrder != null && !productionStarted) {
+            dispatchOrder(currentOrder!!)
+            render("订单已重新下发，请在眼镜开始制作。")
+            return
+        }
+        visionHealth = "等待下一帧检查"
+        startAutoRecognition()
+        render("已恢复识别，当前步骤保持不变。")
     }
 
     private fun handlePhonePhoto(data: Intent?) {
@@ -256,6 +331,7 @@ class MainActivity : Activity() {
 
     private fun handleGlassesFrame(bytes: ByteArray) {
         val now = System.currentTimeMillis()
+        lastFrameAt = now
         val frame = CapturedFrame(now, bytes)
         synchronized(frames) {
             frames.addLast(frame)
@@ -323,6 +399,7 @@ class MainActivity : Activity() {
         executor.execute {
             try {
                 val result = vision.analyze(bytes, "label", null, null)
+                visionHealth = "正常"
                 val ticket = result.ticket
                 val id = ticket?.optString("orderId").orEmpty()
                 val drink = ticket?.optString("drink").orEmpty()
@@ -330,6 +407,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     finishVisionCycle()
                     if (id.isBlank() || drink.isBlank() || result.confidence < 0.85) {
+                        decisionLogStore.append(null, "杯贴识别", result, "等待人工核对", "订单字段不完整或置信度不足")
                         render("杯贴识别不完整或置信度不足，请重新扫描后手动核对。")
                     } else {
                         currentOrder = CupOrder(id, drink, options)
@@ -337,11 +415,16 @@ class MainActivity : Activity() {
                         productionStarted = false
                         useRecipeFor(currentOrder!!)
                         dispatchOrder(currentOrder!!)
+                        decisionLogStore.append(currentOrder, "杯贴识别", result, "订单已下发", result.reason.ifBlank { "高置信度订单识别" })
                         render("已高置信度识别并自动下发：$id · $drink")
                     }
                 }
             } catch (error: Exception) {
-                runOnUiThread { finishVisionCycle(); render("视觉服务错误：${error.message}") }
+                visionHealth = "不可用：${error.message.orEmpty().take(48)}"
+                runOnUiThread {
+                    decisionLogStore.append(null, "杯贴识别", null, "服务错误", error.message.orEmpty())
+                    finishVisionCycle(); render("视觉服务错误：${error.message}")
+                }
             }
         }
     }
@@ -358,16 +441,31 @@ class MainActivity : Activity() {
             try {
                 val gridContext = ingredientGridStore.visionContextFor(expected.title)
                 val result = vision.analyze(bytes, "operation", order, expected.title, gridContext)
+                visionHealth = "正常"
                 runOnUiThread {
                     finishVisionCycle()
                     when {
-                        result.event == expected.event && result.confidence >= 0.75 -> advance(result)
-                        result.event in setOf("wrong", "wrongLabel", "overfill") -> saveException(result)
-                        else -> render("等待${expected.title}：${result.reason.ifBlank { "画面暂不确定" }}")
+                        result.event == expected.event && result.confidence >= 0.75 -> {
+                            decisionLogStore.append(order, expected.title, result, "推进步骤", result.reason.ifBlank { "事件与当前步骤匹配" })
+                            advance(result)
+                        }
+                        result.event in setOf("wrong", "wrongLabel", "overfill") -> {
+                            decisionLogStore.append(order, expected.title, result, "异常提醒", result.reason.ifBlank { "检测到不匹配操作" })
+                            saveException(result)
+                        }
+                        else -> {
+                            decisionLogStore.append(order, expected.title, result, "保持当前步骤", result.reason.ifBlank { "画面暂不确定" })
+                            render("等待${expected.title}：${result.reason.ifBlank { "画面暂不确定" }}")
+                        }
                     }
                 }
             } catch (error: Exception) {
-                runOnUiThread { finishVisionCycle(); render("视觉服务错误：${error.message}") }
+                visionHealth = "不可用：${error.message.orEmpty().take(48)}"
+                runOnUiThread {
+                    autoLoop = false
+                    decisionLogStore.append(order, expected.title, null, "服务错误", error.message.orEmpty())
+                    finishVisionCycle(); render("视觉服务错误：${error.message}，当前步骤已保持。")
+                }
             }
         }
     }
@@ -437,7 +535,11 @@ class MainActivity : Activity() {
     }
 
     private fun startAutoRecognition() {
-        if (autoLoop || !linkReady) return
+        if (autoLoop) return
+        if (!linkReady) {
+            render("眼镜未连接，无法启动识别。")
+            return
+        }
         autoLoop = true
         tickAutoLoop()
     }
@@ -470,6 +572,7 @@ class MainActivity : Activity() {
 
     private fun render(message: String) = runOnUiThread {
         status.text = message
+        healthText.text = buildHealthText()
         val order = currentOrder
         val recipe = currentRecipe
         orderText.text = if (order == null) "当前无订单" else "订单管理\n${order.id} · ${order.drink}\n配料：${recipe?.ingredients?.ifEmpty { order.options }?.ifEmpty { listOf("无") }?.joinToString("、") ?: "无"}\n当前步骤：${recipe?.steps?.getOrNull(stepIndex)?.title ?: "已完成"}"
@@ -488,4 +591,15 @@ class MainActivity : Activity() {
     }
 
     private fun DrinkRecipe?.orEmptySteps() = this?.steps.orEmpty()
+
+    private fun buildHealthText(): String {
+        val frame = if (lastFrameAt == 0L) "未收到" else "${((System.currentTimeMillis() - lastFrameAt) / 1000)} 秒前"
+        val recognition = when {
+            !linkReady -> "已暂停（眼镜未连接）"
+            autoLoop && productionStarted -> "制作中"
+            autoLoop -> "空闲杯贴识别"
+            else -> "已暂停"
+        }
+        return "眼镜：${if (linkReady) "已连接" else "未连接"}（CXR ${if (cxrConnected) "通" else "断"} / 蓝牙 ${if (bluetoothConnected) "通" else "断"}）\n关键帧：$frame\n视觉服务：$visionHealth\n自动识别：$recognition"
+    }
 }

@@ -12,6 +12,8 @@ data class VisionResult(
     val reason: String,
     val source: String,
     val ticket: JSONObject?,
+    val traceId: String = "",
+    val durationMs: Long? = null,
 )
 
 /** Talks only to the Mac-local CupFlow route. Provider credentials stay on the Mac. */
@@ -55,12 +57,15 @@ class VisionClient(private val endpoint: String = "http://127.0.0.1:3000/api/vis
         val response = stream.bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("message", "视觉服务不可用"))
         val json = JSONObject(response)
+        val meta = json.optJSONObject("meta")
         return VisionResult(
             event = json.optString("event", "unknown"),
             confidence = json.optDouble("confidence", 0.0),
             reason = json.optString("reason", ""),
             source = json.optString("source", "direct"),
             ticket = json.optJSONObject("ticket"),
+            traceId = meta?.optString("traceId").orEmpty(),
+            durationMs = meta?.takeIf { it.has("durationMs") }?.optLong("durationMs"),
         )
     }
 }

@@ -8,6 +8,9 @@
         android:label="CupFlow 店长端"
         android:theme="@style/Theme.CupFlowCompanion">
         <activity
+            android:name=".DecisionLogActivity"
+            android:exported="false" />
+        <activity
             android:name=".RecipeManagementActivity"
             android:exported="false" />
         <activity
