@@ -199,12 +199,15 @@ class MainActivity : Activity() {
 
     private fun connect(token: String) {
         val app = application as CupFlowCompanionApplication
-        app.cxrLink?.disconnect()
-        app.cxrLink = null
         autoLoop = false
         linkReady = false
         cxrConnected = false
         bluetoothConnected = false
+        app.token = token
+        app.cxrLink?.let { existing ->
+            startCxrConnection(app, existing, token)
+            return
+        }
 
         val link = CXRLink(this)
         link.apply {
@@ -259,11 +262,13 @@ class MainActivity : Activity() {
             render("CupFlow 无法创建 Rokid 会话，请先在眼镜端打开 CupFlow 后重试。")
             return
         }
-        app.token = token
         app.cxrLink = link
+        startCxrConnection(app, link, token)
+    }
+
+    private fun startCxrConnection(app: CupFlowCompanionApplication, link: CXRLink, token: String) {
         if (!link.connect(token)) {
-            app.cxrLink = null
-            render("无法连接 Rokid 媒体服务。请确认 Rokid AI App 已在前台运行，然后重新授权。")
+            render("Rokid 媒体服务暂未接受连接。请不要连续重试；关闭后重新打开 CupFlow，再授权一次。")
             return
         }
         render("正在连接 Rokid 媒体服务…")
@@ -271,9 +276,7 @@ class MainActivity : Activity() {
             if (app.cxrLink !== link) return@postDelayed
             when {
                 !cxrConnected -> {
-                    link.disconnect()
-                    app.cxrLink = null
-                    render("Rokid 媒体服务 10 秒未响应。请打开 Rokid AI App，再点“重新连接眼镜”。")
+                    render("Rokid 媒体服务 10 秒未响应。请关闭后重新打开 CupFlow，再授权一次。")
                 }
                 !bluetoothConnected -> render("Rokid 服务已连接，但未检测到眼镜数据通道。请在 Rokid AI App 确认眼镜已连接后重试。")
             }
