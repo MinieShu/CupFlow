@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var cxrConnected = false
     private var bluetoothConnected = false
     private var captureBusy = false
+    private var lastCameraFailureAt = 0L
     private var analysisBusy = false
     private var exceptionSaving = false
     private var lastVisionAt = 0L
@@ -538,11 +539,21 @@ class MainActivity : Activity() {
     private fun takeGlassesPhoto() {
         val link = (application as CupFlowCompanionApplication).cxrLink
         if (!linkReady || link == null || captureBusy) {
-            render("眼镜尚未连接或正在拍照。")
+            if (!linkReady) render("眼镜尚未连接，识别已暂停。")
             return
         }
         captureBusy = true
-        link.takePhoto(1024, 768, 80)
+        if (!link.takePhoto(1024, 768, 80)) {
+            // The SDK does not invoke the image callback when the session or camera permission
+            // is unavailable.  Always release the gate so recognition can recover after reconnect.
+            captureBusy = false
+            val now = System.currentTimeMillis()
+            if (now - lastCameraFailureAt >= 3_000) {
+                lastCameraFailureAt = now
+                render("眼镜相机未就绪：请重新授权后等待眼镜连接。")
+                scheduleReconnect("眼镜相机未就绪")
+            }
+        }
     }
 
     private fun handleGlassesFrame(bytes: ByteArray) {
