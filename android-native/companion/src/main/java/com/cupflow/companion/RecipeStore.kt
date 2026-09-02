@@ -15,6 +15,10 @@ data class DrinkRecipe(
 class RecipeStore(context: Context) {
     private val preferences = context.getSharedPreferences("cupflow_recipes", Context.MODE_PRIVATE)
 
+    init {
+        if (load(defaultGuMingMilkTea.drink) == null) save(defaultGuMingMilkTea)
+    }
+
     fun load(drink: String): DrinkRecipe? = runCatching {
         val all = JSONObject(preferences.getString("recipes", "{}") ?: "{}")
         val recipe = all.optJSONObject(key(drink)) ?: return null
@@ -55,10 +59,24 @@ class RecipeStore(context: Context) {
         val supportedSteps = listOf(
             FlowStep("取杯", "cup"),
             FlowStep("加入珍珠", "pearls"),
+            FlowStep("加入奶", "milk"),
+            FlowStep("加入茶", "tea"),
+            FlowStep("盖盖", "seal"),
             FlowStep("加入茶底", "tea"),
             FlowStep("核对液位", "measure"),
             FlowStep("扣紧杯盖", "seal"),
             FlowStep("杯贴核验", "label"),
+        )
+
+        val defaultGuMingMilkTea = DrinkRecipe(
+            drink = "古茗奶茶",
+            ingredients = listOf("珍珠"),
+            steps = listOf(
+                FlowStep("加入珍珠", "pearls"),
+                FlowStep("加入奶", "milk"),
+                FlowStep("加入茶", "tea"),
+                FlowStep("盖盖", "seal"),
+            ),
         )
 
         fun stepForTitle(title: String): FlowStep? = supportedSteps.firstOrNull { it.title == title }

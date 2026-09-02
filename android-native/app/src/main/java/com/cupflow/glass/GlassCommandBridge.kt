@@ -10,12 +10,15 @@ class GlassCommandBridge(private val onCommand: (List<String>) -> Unit) {
 
     init {
         bridge.setStatusListener(object : CXRServiceBridge.StatusListener {
-            override fun onConnected(peer: String?, deviceType: Int) {
+            override fun onConnected(peer: String?, deviceId: String?, deviceType: Int) {
                 Log.d("CupFlowCXR", "connected")
                 bridge.sendMessage(GLASS_TO_PHONE, Caps().apply { write("cupflow_glass_opened") })
             }
             override fun onDisconnected() { Log.d("CupFlowCXR", "disconnected") }
+            override fun onConnecting(peer: String?, deviceId: String?, deviceType: Int) {}
             override fun onARTCStatus(value: Float, active: Boolean) {}
+            override fun onRokidAccountChanged(accountId: String?) {}
+            override fun onAudioNoise(value: Float) {}
         })
         bridge.subscribe(PHONE_TO_GLASS, object : CXRServiceBridge.MsgCallback {
             override fun onReceive(name: String?, args: Caps?, bytes: ByteArray?) {

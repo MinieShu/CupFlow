@@ -52,7 +52,7 @@ class RecipeManagementActivity : Activity() {
         importCard.addView(text("导入配方文本", 19f).apply { typeface = Typeface.DEFAULT_BOLD })
         importCard.addView(text("按“饮品 / 配料 / 流程”粘贴，自动生成标准步骤。", 13f, 0xff71817b.toInt()))
         importText = EditText(this).apply {
-            hint = "饮品：云朵乌龙奶茶\n配料：\n珍珠 1 勺\n少糖\n流程：\n取杯\n加入珍珠\n加入茶底\n核对液位\n扣紧杯盖\n杯贴核验"
+            hint = "饮品：古茗奶茶\n配料：\n珍珠\n流程：\n加入珍珠\n加入奶\n加入茶\n盖盖"
             minLines = 8
             setPadding(16, 16, 16, 16)
             setBackground(rounded(0xfff7f6ef.toInt(), 0xffe1e5da.toInt()))

@@ -26,5 +26,5 @@ android {
 }
 
 dependencies {
-    implementation("com.rokid.cxr:client-l:1.0.1")
+    implementation("com.rokid.cxr:client-l:1.0.3")
 }

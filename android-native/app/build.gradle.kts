@@ -27,5 +27,5 @@ android {
 
 dependencies {
     // Official Rokid CXR-S bridge for native YodaOS-Sprite glasses apps.
-    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20250519.061355-45")
+    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260522.063600-105")
 }

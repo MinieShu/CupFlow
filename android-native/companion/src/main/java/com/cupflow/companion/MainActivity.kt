@@ -167,11 +167,11 @@ class MainActivity : Activity() {
     }
 
     private fun requestAuthorization() {
-        if (!AuthorizationHelper.INSTANCE.isRequiredRokidAppInstalled(this)) {
+        if (!AuthorizationHelper.isRequiredRokidAppInstalled(this)) {
             render("未找到 Rokid AI App，请先安装并连接眼镜。")
             return
         }
-        AuthorizationHelper.INSTANCE.requestAuthorization(this, authRequest)
+        AuthorizationHelper.requestAuthorization(this, null, authRequest)
     }
 
     @Deprecated("CXR-L currently returns authorization through Activity result")
@@ -190,7 +190,7 @@ class MainActivity : Activity() {
     }
 
     private fun handleAuthorization(resultCode: Int, data: Intent?) {
-        when (val result = AuthorizationHelper.INSTANCE.parseAuthorizationResult(resultCode, data)) {
+        when (val result = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
             is AuthResult.AuthSuccess -> connect(result.token)
             is AuthResult.AuthFail -> render("Rokid 授权失败，请在 Rokid AI App 中允许 CupFlow。")
             else -> render("授权已取消。")
@@ -225,6 +225,9 @@ class MainActivity : Activity() {
                 }
                 override fun onGlassAiAssistStart() {}
                 override fun onGlassAiAssistStop() {}
+                override fun onGlassAiInterrupt(interrupt: Boolean) {}
+                override fun onGlassDeviceInfo(info: com.rokid.cxr.link.utils.GlassInfo) {}
+                override fun onGlassWearingStatus(wearing: Boolean) {}
             })
             setCXRImageCbk(object : IImageStreamCbk {
                 override fun onImageReceived(data: ByteArray?) {
@@ -551,7 +554,7 @@ class MainActivity : Activity() {
             write(order.options.joinToString("、"))
             write(glassesName)
             write(JSONArray(currentRecipe?.steps?.map { it.title }.orEmpty()).toString())
-        }.serialize())
+        })
         render("已下发订单，请在眼镜点击或说“开始制作”。")
     }
 
@@ -570,7 +573,7 @@ class MainActivity : Activity() {
             write(stepIndex.toString())
             write(next?.title ?: "订单完成")
             write(message)
-        }.serialize())
+        })
         if (next == null) autoLoop = false
         render(message)
     }
@@ -583,7 +586,7 @@ class MainActivity : Activity() {
         (application as CupFlowCompanionApplication).cxrLink?.sendCustomCmd("cupflow_to_glass", Caps().apply {
             write("cupflow_alert")
             write(result.reason.ifBlank { "当前操作异常，请纠正后继续。" })
-        }.serialize())
+        })
         window.decorView.postDelayed({
             val order = currentOrder ?: return@postDelayed
             val snapshot = synchronized(frames) { frames.toList() }
