@@ -82,7 +82,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         glassesName = getPreferences(MODE_PRIVATE).getString("glassesName", glassesName) ?: glassesName
         setContentView(buildView())
-        render("请先授权并连接 Rokid AI App。")
+        val app = application as CupFlowCompanionApplication
+        if (app.token.isBlank()) render("请先授权并连接 Rokid AI App。")
+        else window.decorView.post { connect(app.token) }
     }
 
     override fun onDestroy() {
@@ -121,7 +123,8 @@ class MainActivity : Activity() {
         glassesNameInput = EditText(this).apply { hint = "眼镜名称"; setText(glassesName) }
         glassesCard.addView(glassesNameInput)
         glassesCard.addView(button("保存眼镜名称") { saveGlassesName() })
-        glassesCard.addView(button("授权并连接眼镜", true) { requestAuthorization() })
+        glassesCard.addView(button("连接已授权眼镜", true) { connectAuthorizedGlasses() })
+        glassesCard.addView(button("重新授权眼镜") { requestAuthorization() })
         body.addView(glassesCard)
 
         val orderCard = card("扫描下发订单", "仅由店长手机扫描杯贴、核对并下发眼镜")
@@ -227,7 +230,11 @@ class MainActivity : Activity() {
     private fun handleAuthorization(resultCode: Int, data: Intent?) {
         authorizationPending = false
         when (val result = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
-            is AuthResult.AuthSuccess -> connect(result.token)
+            is AuthResult.AuthSuccess -> {
+                (application as CupFlowCompanionApplication).token = result.token
+                AuthTokenStore(this).save(result.token)
+                connect(result.token)
+            }
             is AuthResult.AuthFail -> render("Rokid 授权失败，请在 Rokid AI App 中允许 CupFlow。")
             else -> render("授权已取消。")
         }
@@ -408,6 +415,15 @@ class MainActivity : Activity() {
     private fun reconnectGlasses() {
         val token = (application as CupFlowCompanionApplication).token
         if (token.isBlank()) requestAuthorization() else connect(token)
+    }
+
+    private fun connectAuthorizedGlasses() {
+        val token = (application as CupFlowCompanionApplication).token
+        if (token.isBlank()) {
+            render("尚无已保存授权，请先重新授权眼镜。")
+            return
+        }
+        connect(token)
     }
 
     private fun configureVisionEndpoint() {
