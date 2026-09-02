@@ -138,6 +138,7 @@ class MainActivity : Activity() {
                 )
                 render()
                 speak("订单 $orderId，$drink。请说开始制作，或轻触开始。")
+                commandBridge.sendEvent("cupflow_order_received", orderId)
                 scheduleVoiceStart()
             }
             "cupflow_start" -> startOrder()

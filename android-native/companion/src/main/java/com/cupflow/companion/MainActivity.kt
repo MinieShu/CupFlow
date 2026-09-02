@@ -77,6 +77,13 @@ class MainActivity : Activity() {
     private var authorizationRequestedAt = 0L
     private var voiceCaptureActive = false
     private var voiceCaptureSession = 0
+    private var connectionPending = false
+    private var reconnectScheduled = false
+    private var reconnectAttempts = 0
+    private var deliveryPending = false
+    private var deliveryAttempts = 0
+    private var deliveryOrderId: String? = null
+    private var startAfterDelivery = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -240,13 +247,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connect(token: String) {
+    private fun connect(token: String, forceFresh: Boolean = false) {
         val app = application as CupFlowCompanionApplication
+        if (linkReady && !forceFresh) {
+            render("● 眼镜已连接。")
+            return
+        }
+        if (connectionPending) {
+            render("正在连接眼镜，请稍候。")
+            return
+        }
+        connectionPending = true
         autoLoop = false
         linkReady = false
         cxrConnected = false
         bluetoothConnected = false
         app.token = token
+        if (forceFresh) {
+            app.cxrLink?.disconnect()
+            app.cxrLink = null
+        }
         app.cxrLink?.let { existing ->
             startCxrConnection(app, existing, token)
             return
@@ -260,11 +280,13 @@ class MainActivity : Activity() {
                     cxrConnected = connected
                     if (connected) bluetoothConnected = runCatching { link.isGlassBtConnected() }.getOrDefault(false)
                     updateLinkReady()
+                    if (!connected && !connectionPending) window.decorView.post { scheduleReconnect("媒体服务已断开") }
                 }
                 override fun onGlassBtConnected(connected: Boolean) {
                     if (app.cxrLink !== link) return
                     bluetoothConnected = connected
                     updateLinkReady()
+                    if (!connected && !connectionPending) window.decorView.post { scheduleReconnect("眼镜数据通道已断开") }
                 }
                 override fun onGlassAiAssistStart() {}
                 override fun onGlassAiAssistStop() {}
@@ -321,11 +343,13 @@ class MainActivity : Activity() {
                             }
                             "cupflow_started" -> {
                                 if (currentOrder != null) {
+                                    startAfterDelivery = false
                                     productionStarted = true
                                     render("已开始制作：等待${currentRecipe?.steps?.getOrNull(stepIndex)?.title.orEmpty()}。")
                                     startAutoRecognition()
                                 }
                             }
+                            "cupflow_order_received" -> confirmOrderDelivery(values.getOrNull(1))
                             "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
                             "cupflow_voice_start" -> startGlassesVoiceCapture()
                             "cupflow_voice_stop" -> stopGlassesVoiceCapture()
@@ -335,7 +359,9 @@ class MainActivity : Activity() {
             })
         }
         if (!link.configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.cupflow.glass"))) {
-            render("CupFlow 无法创建 Rokid 会话，请先在眼镜端打开 CupFlow 后重试。")
+            connectionPending = false
+            render("CupFlow 暂无法创建 Rokid 会话，正在准备重连。")
+            scheduleReconnect("Rokid 会话未就绪")
             return
         }
         app.cxrLink = link
@@ -344,7 +370,9 @@ class MainActivity : Activity() {
 
     private fun startCxrConnection(app: CupFlowCompanionApplication, link: CXRLink, token: String) {
         if (!link.connect(token)) {
-            render("Rokid 媒体服务暂未接受连接。请不要连续重试；关闭后重新打开 CupFlow，再授权一次。")
+            connectionPending = false
+            render("Rokid 媒体服务暂未接受连接，正在准备重连。")
+            scheduleReconnect("媒体服务未响应")
             return
         }
         render("正在连接 Rokid 媒体服务…")
@@ -352,16 +380,39 @@ class MainActivity : Activity() {
             if (app.cxrLink !== link) return@postDelayed
             when {
                 !cxrConnected -> {
-                    render("Rokid 媒体服务 10 秒未响应。请关闭后重新打开 CupFlow，再授权一次。")
+                    connectionPending = false
+                    render("Rokid 媒体服务 10 秒未响应，正在准备重连。")
+                    scheduleReconnect("媒体服务超时")
                 }
-                !bluetoothConnected -> render("Rokid 服务已连接，但未检测到眼镜数据通道。请在 Rokid AI App 确认眼镜已连接后重试。")
+                !bluetoothConnected -> {
+                    connectionPending = false
+                    render("Rokid 服务已连接，但未检测到眼镜数据通道，正在准备重连。")
+                    scheduleReconnect("眼镜数据通道未就绪")
+                }
             }
         }, 10_000)
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        if (linkReady || reconnectScheduled || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return
+        val token = (application as CupFlowCompanionApplication).token
+        if (token.isBlank()) return
+        reconnectScheduled = true
+        reconnectAttempts += 1
+        val delay = reconnectAttempts * 1_500L
+        window.decorView.postDelayed({
+            reconnectScheduled = false
+            if (!linkReady) connect(token, forceFresh = true)
+        }, delay)
     }
 
     private fun updateLinkReady() = runOnUiThread {
         linkReady = cxrConnected && bluetoothConnected
         if (!linkReady) autoLoop = false
+        if (linkReady) {
+            connectionPending = false
+            reconnectAttempts = 0
+        }
         val message = when {
             linkReady -> "● 眼镜数据通道已连接，等待眼镜端 CupFlow 启动。"
             cxrConnected -> "Rokid 服务已连接，正在等待眼镜数据通道。"
@@ -414,7 +465,7 @@ class MainActivity : Activity() {
 
     private fun reconnectGlasses() {
         val token = (application as CupFlowCompanionApplication).token
-        if (token.isBlank()) requestAuthorization() else connect(token)
+        if (token.isBlank()) requestAuthorization() else connect(token, forceFresh = true)
     }
 
     private fun connectAuthorizedGlasses() {
@@ -633,6 +684,12 @@ class MainActivity : Activity() {
             render("订单已读取；等待眼镜连接后再下发。")
             return
         }
+        if (deliveryOrderId != order.id) {
+            deliveryOrderId = order.id
+            deliveryAttempts = 0
+        }
+        deliveryPending = true
+        deliveryAttempts += 1
         link.sendCustomCmd("cupflow_to_glass", Caps().apply {
             write("cupflow_order")
             write(order.id)
@@ -641,7 +698,27 @@ class MainActivity : Activity() {
             write(glassesName)
             write(JSONArray(currentRecipe?.steps?.map { it.title }.orEmpty()).toString())
         })
-        render("已下发订单，请在眼镜点击或说“开始制作”。")
+        render("正在下发订单（第 $deliveryAttempts 次），等待眼镜确认…")
+        window.decorView.postDelayed({
+            if (!deliveryPending || currentOrder?.id != order.id) return@postDelayed
+            if (deliveryAttempts < MAX_DELIVERY_ATTEMPTS) dispatchOrder(order)
+            else {
+                deliveryPending = false
+                render("眼镜未确认收到订单，请检查连接后点击“重新下发当前订单”。")
+            }
+        }, ORDER_CONFIRM_TIMEOUT_MS)
+    }
+
+    private fun confirmOrderDelivery(orderId: String?) {
+        val order = currentOrder ?: return
+        if (order.id != orderId) return
+        deliveryPending = false
+        deliveryAttempts = 0
+        render("订单已送达眼镜：${order.id} · ${order.drink}。")
+        if (startAfterDelivery) {
+            startAfterDelivery = false
+            startProductionFromManager(order)
+        }
     }
 
     private fun startCurrentOrderFromManager() {
@@ -654,7 +731,13 @@ class MainActivity : Activity() {
             render("眼镜尚未连接，无法开始当前订单。")
             return
         }
+        startAfterDelivery = true
         dispatchOrder(order)
+        render("正在确认订单已送达眼镜…")
+    }
+
+    private fun startProductionFromManager(order: CupOrder) {
+        val link = (application as CupFlowCompanionApplication).cxrLink ?: return
         productionStarted = true
         link.sendCustomCmd("cupflow_to_glass", Caps().apply { write("cupflow_start") })
         val firstStep = currentRecipe?.steps?.getOrNull(stepIndex)?.title ?: "当前步骤"
@@ -869,6 +952,9 @@ class MainActivity : Activity() {
         currentRecipe = null
         stepIndex = 0
         productionStarted = false
+        deliveryPending = false
+        deliveryOrderId = null
+        startAfterDelivery = false
         render("当前订单已清除，请由店长手机扫描下一张杯贴。")
     }
 
@@ -917,5 +1003,8 @@ class MainActivity : Activity() {
         private const val VOICE_SAMPLE_RATE = 16_000
         private const val VOICE_CHANNELS = 1
         private const val VOICE_BITS_PER_SAMPLE = 16
+        private const val MAX_RECONNECT_ATTEMPTS = 3
+        private const val MAX_DELIVERY_ATTEMPTS = 3
+        private const val ORDER_CONFIRM_TIMEOUT_MS = 1_500L
     }
 }
