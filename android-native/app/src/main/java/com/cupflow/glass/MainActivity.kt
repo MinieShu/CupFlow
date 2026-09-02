@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.view.KeyEvent
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -66,6 +67,14 @@ class MainActivity : Activity() {
         if (hasFocus) enterImmersiveMode()
     }
 
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode in setOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_BUTTON_A)) {
+            handleActionTap()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == MICROPHONE_REQUEST && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) scheduleVoiceStart()
@@ -77,6 +86,9 @@ class MainActivity : Activity() {
             gravity = Gravity.BOTTOM
             setPadding(28, 8, 28, 18)
             setBackgroundColor(Color.BLACK)
+            isFocusableInTouchMode = true
+            requestFocus()
+            setOnClickListener { handleActionTap() }
         }
         status = text("", 11f, R.color.glass_muted)
         currentStep = text("", 19f, R.color.glass_text)
@@ -141,6 +153,7 @@ class MainActivity : Activity() {
                 speak("订单 $orderId，$drink。请说开始制作，或轻触开始。")
                 scheduleVoiceStart()
             }
+            "cupflow_start" -> startOrder()
             "cupflow_flow" -> {
                 val nextStep = values.getOrNull(1)?.toIntOrNull() ?: state.step
                 val stepName = values.getOrNull(2).orEmpty()

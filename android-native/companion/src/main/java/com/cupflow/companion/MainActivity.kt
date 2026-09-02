@@ -124,6 +124,7 @@ class MainActivity : Activity() {
         orderCard.addView(button("扫描杯贴并下发订单", true) { scanCupLabelFromPhone() })
         orderCard.addView(button("导入 POS / JSON 订单") { importOrderFromJson() })
         orderCard.addView(button("重新下发当前订单") { currentOrder?.let(::dispatchOrder) ?: render("请先扫描杯贴。") })
+        orderCard.addView(button("开始当前订单", true) { startCurrentOrderFromManager() })
         orderCard.addView(button("结束当前订单") { clearOrder() })
         body.addView(orderCard)
 
@@ -320,6 +321,11 @@ class MainActivity : Activity() {
             else -> "○ 眼镜连接中断，当前步骤已保持。"
         }
         render(message)
+        if (linkReady) {
+            currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder) ?: run {
+                if (currentOrder == null) startAutoRecognition()
+            }
+        }
     }
 
     private fun scanCupLabelFromPhone() {
@@ -581,6 +587,24 @@ class MainActivity : Activity() {
             write(JSONArray(currentRecipe?.steps?.map { it.title }.orEmpty()).toString())
         })
         render("已下发订单，请在眼镜点击或说“开始制作”。")
+    }
+
+    private fun startCurrentOrderFromManager() {
+        val order = currentOrder ?: run {
+            render("请先扫描或导入订单。")
+            return
+        }
+        val link = (application as CupFlowCompanionApplication).cxrLink
+        if (!linkReady || link == null) {
+            render("眼镜尚未连接，无法开始当前订单。")
+            return
+        }
+        dispatchOrder(order)
+        productionStarted = true
+        link.sendCustomCmd("cupflow_to_glass", Caps().apply { write("cupflow_start") })
+        val firstStep = currentRecipe?.steps?.getOrNull(stepIndex)?.title ?: "当前步骤"
+        render("已从店长端开始制作：$firstStep。")
+        startAutoRecognition()
     }
 
     private fun advance(result: VisionResult) {
