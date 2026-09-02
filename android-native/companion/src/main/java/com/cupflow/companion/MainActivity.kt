@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -54,6 +55,8 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var healthText: TextView
+    private lateinit var cameraPreview: ImageView
+    private lateinit var cameraPreviewText: TextView
     private lateinit var orderText: TextView
     private lateinit var procedureText: TextView
     private lateinit var glassesNameInput: EditText
@@ -71,6 +74,7 @@ class MainActivity : Activity() {
     private var exceptionSaving = false
     private var lastVisionAt = 0L
     private var autoLoop = false
+    private var previewLoop = false
     private var latestFrame: CapturedFrame? = null
     private var latestFingerprint: IntArray? = null
     private var lastVisionFingerprint: IntArray? = null
@@ -101,6 +105,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         autoLoop = false
+        previewLoop = false
         (application as CupFlowCompanionApplication).cxrLink?.disconnect()
         executor.shutdownNow()
         frameExecutor.shutdownNow()
@@ -129,6 +134,15 @@ class MainActivity : Activity() {
         healthCard.addView(button("恢复当前订单识别") { resumeRecognition() })
         healthCard.addView(button("配置视觉服务地址") { configureVisionEndpoint() })
         healthCard.addView(button("查看识别决策日志") { startActivity(Intent(this, DecisionLogActivity::class.java)) })
+        healthCard.addView(text("眼镜实时画面", 15f).apply { typeface = Typeface.DEFAULT_BOLD }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14 })
+        cameraPreview = ImageView(this).apply {
+            setBackgroundColor(0xffdce5df.toInt())
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            contentDescription = "眼镜实时画面"
+        }
+        healthCard.addView(cameraPreview, LinearLayout.LayoutParams(-1, 360).apply { topMargin = 8 })
+        cameraPreviewText = text("等待眼镜相机画面…", 12f, 0xff71817b.toInt())
+        healthCard.addView(cameraPreviewText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
         body.addView(healthCard)
 
         val glassesCard = card("眼镜管理", "连接状态与操作员名称")
@@ -413,7 +427,11 @@ class MainActivity : Activity() {
 
     private fun updateLinkReady() = runOnUiThread {
         linkReady = cxrConnected && bluetoothConnected
-        if (!linkReady) autoLoop = false
+        if (!linkReady) {
+            autoLoop = false
+            previewLoop = false
+            cameraPreviewText.text = "眼镜未连接，无法显示实时画面。"
+        }
         if (linkReady) {
             connectionPending = false
             reconnectAttempts = 0
@@ -424,7 +442,25 @@ class MainActivity : Activity() {
             else -> "○ 眼镜连接中断，当前步骤已保持。"
         }
         render(message)
+        if (linkReady) startCameraPreview()
         if (linkReady) currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder)
+    }
+
+    private fun startCameraPreview() {
+        if (!linkReady || previewLoop) return
+        if (!AuthorizationHelper.hasGlassPermission(GlassPermission.CAMERA)) {
+            cameraPreviewText.text = "眼镜相机未授权：请点击“重新授权眼镜”。"
+            return
+        }
+        previewLoop = true
+        cameraPreviewText.text = "正在接收眼镜实时画面（仅预览，不保存）"
+        tickCameraPreview()
+    }
+
+    private fun tickCameraPreview() {
+        if (!previewLoop) return
+        takeGlassesPhoto()
+        window.decorView.postDelayed({ tickCameraPreview() }, 700)
     }
 
     private fun scanCupLabelFromPhone() {
@@ -605,6 +641,11 @@ class MainActivity : Activity() {
             // The SDK does not invoke the image callback when the session or camera permission
             // is unavailable.  Always release the gate so recognition can recover after reconnect.
             captureBusy = false
+            if (!AuthorizationHelper.hasGlassPermission(GlassPermission.CAMERA)) {
+                previewLoop = false
+                autoLoop = false
+                cameraPreviewText.text = "眼镜相机未授权：请重新授权后再试。"
+            }
             val now = System.currentTimeMillis()
             if (now - lastCameraFailureAt >= 3_000) {
                 lastCameraFailureAt = now
@@ -623,8 +664,17 @@ class MainActivity : Activity() {
             while (frames.isNotEmpty() && now - frames.first.at > 5_000) frames.removeFirst()
         }
         frameExecutor.execute {
-            val fingerprint = fingerprint(bytes) ?: return@execute
+            val preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                inSampleSize = 4
+                inPreferredConfig = Bitmap.Config.RGB_565
+            })
+            val fingerprint = fingerprint(bytes)
             runOnUiThread {
+                preview?.let {
+                    cameraPreview.setImageBitmap(it)
+                    cameraPreviewText.text = "眼镜实时画面 · 刚刚更新（仅预览，不保存）"
+                }
+                if (fingerprint == null) return@runOnUiThread
                 latestFrame = frame
                 latestFingerprint = fingerprint
                 evaluateLatestFrame()
@@ -1011,6 +1061,11 @@ class MainActivity : Activity() {
         if (autoLoop) return
         if (!linkReady || currentOrder == null || !productionStarted) {
             if (!linkReady) render("眼镜未连接，无法启动识别。")
+            return
+        }
+        if (!AuthorizationHelper.hasGlassPermission(GlassPermission.CAMERA)) {
+            cameraPreviewText.text = "眼镜相机未授权：请重新授权后再开始制作。"
+            render("眼镜相机未授权，无法启动动作识别。")
             return
         }
         autoLoop = true
