@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="glass_background">#000000</color>
+    <color name="glass_panel">#123A2F</color>
+    <color name="glass_primary">#D8F36C</color>
+    <color name="glass_text">#F4F8F0</color>
+    <color name="glass_muted">#B6CFC0</color>
+    <color name="glass_alert">#FF8C70</color>
+</resources>

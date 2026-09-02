@@ -1,0 +1,38 @@
+package com.cupflow.glass
+
+import android.util.Log
+import com.rokid.cxr.CXRServiceBridge
+import com.rokid.cxr.Caps
+
+/** CXR-S endpoint for the phone Companion's CUSTOMAPP messages. */
+class GlassCommandBridge(private val onCommand: (List<String>) -> Unit) {
+    private val bridge = CXRServiceBridge()
+
+    init {
+        bridge.setStatusListener(object : CXRServiceBridge.StatusListener {
+            override fun onConnected(peer: String?, deviceType: Int) {
+                Log.d("CupFlowCXR", "connected")
+                bridge.sendMessage(GLASS_TO_PHONE, Caps().apply { write("cupflow_glass_opened") })
+            }
+            override fun onDisconnected() { Log.d("CupFlowCXR", "disconnected") }
+            override fun onARTCStatus(value: Float, active: Boolean) {}
+        })
+        bridge.subscribe(PHONE_TO_GLASS, object : CXRServiceBridge.MsgCallback {
+            override fun onReceive(name: String?, args: Caps?, bytes: ByteArray?) {
+                val values = args?.let { caps ->
+                    (0 until caps.size()).map { index -> caps.at(index).string.orEmpty() }
+                }.orEmpty()
+                if (values.isNotEmpty()) onCommand(values)
+            }
+        })
+    }
+
+    fun sendEvent(event: String) {
+        bridge.sendMessage(GLASS_TO_PHONE, Caps().apply { write(event) })
+    }
+
+    companion object {
+        const val PHONE_TO_GLASS = "cupflow_to_glass"
+        const val GLASS_TO_PHONE = "cupflow_to_phone"
+    }
+}
