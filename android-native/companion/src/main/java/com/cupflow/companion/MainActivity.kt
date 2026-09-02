@@ -69,6 +69,7 @@ class MainActivity : Activity() {
     private var cxrConnected = false
     private var bluetoothConnected = false
     private var captureBusy = false
+    private var captureStartedAt = 0L
     private var lastCameraFailureAt = 0L
     private var analysisBusy = false
     private var exceptionSaving = false
@@ -476,6 +477,10 @@ class MainActivity : Activity() {
 
     private fun tickCameraPreview() {
         if (!previewLoop) return
+        if (captureBusy && System.currentTimeMillis() - captureStartedAt > CAMERA_CAPTURE_TIMEOUT_MS) {
+            captureBusy = false
+            cameraPreviewText.text = "画面更新延迟，正在重新获取…"
+        }
         takeGlassesPhoto()
         window.decorView.postDelayed({ tickCameraPreview() }, 700)
     }
@@ -654,10 +659,12 @@ class MainActivity : Activity() {
             return
         }
         captureBusy = true
+        captureStartedAt = System.currentTimeMillis()
         if (!link.takePhoto(1024, 768, 80)) {
             // The SDK does not invoke the image callback when the session or camera permission
             // is unavailable.  Always release the gate so recognition can recover after reconnect.
             captureBusy = false
+            captureStartedAt = 0L
             if (!AuthorizationHelper.hasGlassPermission(GlassPermission.CAMERA)) {
                 previewLoop = false
                 autoLoop = false
@@ -673,6 +680,8 @@ class MainActivity : Activity() {
     }
 
     private fun handleGlassesFrame(bytes: ByteArray) {
+        captureBusy = false
+        captureStartedAt = 0L
         val now = System.currentTimeMillis()
         lastFrameAt = now
         val frame = CapturedFrame(now, bytes)
@@ -1161,6 +1170,7 @@ class MainActivity : Activity() {
         private const val MAX_RECONNECT_ATTEMPTS = 3
         private const val MAX_DELIVERY_ATTEMPTS = 3
         private const val ORDER_CONFIRM_TIMEOUT_MS = 1_500L
+        private const val CAMERA_CAPTURE_TIMEOUT_MS = 3_000L
         private const val MAX_LABEL_IMAGE_BYTES = 4_500_000
         private const val MAX_LABEL_IMAGE_EDGE = 2_048
     }
