@@ -242,7 +242,10 @@ class MainActivity : Activity() {
             setCXRCustomCmdCbk(object : ICustomCmdCbk {
                 override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
                     if (key != "cupflow_to_phone") return
-                    val event = payload?.let { Caps.fromBytes(it) }?.takeIf { it.size() > 0 }?.at(0)?.string.orEmpty()
+                    val values = payload?.let { caps -> Caps.fromBytes(caps) }?.let { caps ->
+                        (0 until caps.size()).map { index -> caps.at(index).string.orEmpty() }
+                    }.orEmpty()
+                    val event = values.firstOrNull().orEmpty()
                     runOnUiThread {
                         when (event) {
                             "cupflow_glass_opened" -> {
@@ -256,6 +259,7 @@ class MainActivity : Activity() {
                                     evaluateLatestFrame()
                                 }
                             }
+                            "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
                         }
                     }
                 }
@@ -600,6 +604,45 @@ class MainActivity : Activity() {
                     }
                 } catch (error: Exception) {
                     runOnUiThread { exceptionSaving = false; render("异常保存失败：${error.message}") }
+                }
+            }
+        }, 2_000)
+    }
+
+    private fun recordManualSkip(requestedStep: String?) {
+        if (exceptionSaving || !productionStarted) return
+        val order = currentOrder ?: return
+        val step = currentRecipe?.steps?.getOrNull(stepIndex) ?: return
+        val result = VisionResult(
+            event = "manualSkip",
+            confidence = 1.0,
+            reason = "眼镜轻触跳过：${requestedStep?.takeIf { it.isNotBlank() } ?: step.title}",
+            source = "manual",
+            ticket = null,
+        )
+        decisionLogStore.append(order, step.title, result, "人工跳过", "眼镜端轻触跳过，已作为异常记录")
+        exceptionSaving = true
+        autoLoop = false
+        render("已跳过${step.title}，正在保留前后 2 秒关键帧…")
+        window.decorView.postDelayed({
+            val snapshot = synchronized(frames) { frames.toList() }
+            executor.execute {
+                try {
+                    EvidenceStore(this).save(order, glassesName, result.event, result.confidence, result.reason, "眼镜轻触跳过", snapshot)
+                    runOnUiThread {
+                        exceptionSaving = false
+                        advance(result)
+                        (application as CupFlowCompanionApplication).cxrLink?.sendCustomCmd("cupflow_to_glass", Caps().apply {
+                            write("cupflow_skip_saved")
+                            write("跳过${step.title}已记为异常，已继续下一步。")
+                        })
+                        if (currentRecipe?.steps?.getOrNull(stepIndex) != null) startAutoRecognition()
+                    }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        exceptionSaving = false
+                        render("跳过记录保存失败：${error.message}")
+                    }
                 }
             }
         }, 2_000)

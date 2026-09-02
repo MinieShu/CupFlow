@@ -84,7 +84,7 @@ class MainActivity : Activity() {
         action = text("", 14f, R.color.glass_primary).apply {
             isClickable = true
             setPadding(0, 8, 0, 0)
-            setOnClickListener { startOrder() }
+            setOnClickListener { handleActionTap() }
         }
         root.addView(status)
         root.addView(currentStep, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 5 })
@@ -107,6 +107,21 @@ class MainActivity : Activity() {
         render()
         speak("开始制作。")
         commandBridge.sendEvent("cupflow_started")
+    }
+
+    private fun handleActionTap() {
+        when {
+            state.status.contains("待开始") -> startOrder()
+            state.status.contains("制作中") -> skipCurrentStep()
+        }
+    }
+
+    private fun skipCurrentStep() {
+        val stepName = state.steps.getOrNull(state.step) ?: return
+        state = state.copy(message = "已跳过 $stepName，正在记录异常…", alert = false)
+        render()
+        speak("已跳过当前步骤，正在记录。")
+        commandBridge.sendEvent("cupflow_skip", stepName)
     }
 
     private fun handlePhoneCommand(values: List<String>) = runOnUiThread {
@@ -143,6 +158,11 @@ class MainActivity : Activity() {
                 render()
                 speak("异常，请纠正后继续。")
             }
+            "cupflow_skip_saved" -> {
+                state = state.copy(message = values.getOrNull(1) ?: "跳过已记为异常，已继续下一步。", alert = false)
+                render()
+                speak("跳过已记录，继续下一步。")
+            }
         }
     }
 
@@ -162,7 +182,11 @@ class MainActivity : Activity() {
         val color = if (state.alert) Color.rgb(255, 92, 92) else getColor(R.color.glass_text)
         currentStep.setTextColor(color)
         message.setTextColor(color)
-        action.text = if (state.status.contains("待开始")) "说“开始制作”或轻触开始" else ""
+        action.text = when {
+            state.status.contains("待开始") -> "说“开始制作”或轻触开始"
+            state.status.contains("制作中") -> "轻触跳过当前步骤（将记录异常）"
+            else -> ""
+        }
         action.visibility = if (action.text.isBlank()) View.GONE else View.VISIBLE
     }
 

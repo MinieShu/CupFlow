@@ -30,8 +30,11 @@ class GlassCommandBridge(private val onCommand: (List<String>) -> Unit) {
         })
     }
 
-    fun sendEvent(event: String) {
-        bridge.sendMessage(GLASS_TO_PHONE, Caps().apply { write(event) })
+    fun sendEvent(event: String, vararg details: String) {
+        bridge.sendMessage(GLASS_TO_PHONE, Caps().apply {
+            write(event)
+            details.forEach(::write)
+        })
     }
 
     companion object {
