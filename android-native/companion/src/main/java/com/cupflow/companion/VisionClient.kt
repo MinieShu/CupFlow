@@ -60,7 +60,8 @@ class VisionClient(private val endpointProvider: () -> String = { VisionSettings
         val connection = (URL(endpointProvider()).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000
-            readTimeout = 30_000
+            // Cup labels are captured at higher resolution and can take longer for OCR than live actions.
+            readTimeout = if (mode == "label") 60_000 else 30_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
         }
