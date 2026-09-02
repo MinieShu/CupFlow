@@ -68,6 +68,8 @@ class MainActivity : Activity() {
     private var lastVisionFingerprint: IntArray? = null
     private var lastFrameAt = 0L
     private var visionHealth = "等待视觉服务检查"
+    private var authorizationPending = false
+    private var authorizationRequestedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -167,11 +169,29 @@ class MainActivity : Activity() {
     }
 
     private fun requestAuthorization() {
+        if (authorizationPending) {
+            render("正在等待 Rokid AI App 的授权响应，请不要重复点击。")
+            return
+        }
         if (!AuthorizationHelper.isRequiredRokidAppInstalled(this)) {
             render("未找到 Rokid AI App，请先安装并连接眼镜。")
             return
         }
-        AuthorizationHelper.requestAuthorization(this, null, authRequest)
+        authorizationPending = true
+        authorizationRequestedAt = System.currentTimeMillis()
+        render("正在打开 Rokid AI App 授权…请在其中允许 CupFlow。")
+        runCatching { AuthorizationHelper.requestAuthorization(this, null, authRequest) }
+            .onFailure {
+                authorizationPending = false
+                render("无法发起 Rokid 授权：${it.message.orEmpty().take(48)}")
+                return
+            }
+        window.decorView.postDelayed({
+            if (authorizationPending && System.currentTimeMillis() - authorizationRequestedAt >= AUTHORIZATION_TIMEOUT_MS) {
+                authorizationPending = false
+                render("未收到 Rokid 授权响应。请确认 Rokid AI App 已打开、眼镜已连接，再点击授权。")
+            }
+        }, AUTHORIZATION_TIMEOUT_MS)
     }
 
     @Deprecated("CXR-L currently returns authorization through Activity result")
@@ -190,6 +210,7 @@ class MainActivity : Activity() {
     }
 
     private fun handleAuthorization(resultCode: Int, data: Intent?) {
+        authorizationPending = false
         when (val result = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
             is AuthResult.AuthSuccess -> connect(result.token)
             is AuthResult.AuthFail -> render("Rokid 授权失败，请在 Rokid AI App 中允许 CupFlow。")
@@ -563,15 +584,21 @@ class MainActivity : Activity() {
     }
 
     private fun advance(result: VisionResult) {
+        val completedStep = currentRecipe?.steps?.getOrNull(stepIndex)?.title.orEmpty()
         stepIndex += 1
         val order = currentOrder ?: return
         val next = currentRecipe?.steps?.getOrNull(stepIndex)
         val source = when (result.source) {
             "grid" -> "格位兜底"
             "reference" -> "基准图辅助"
+            "manual" -> "人工跳过"
             else -> "直接识别"
         }
-        val message = if (next == null) "订单完成，请店长下发下一单。" else "已识别${result.reason}（$source），下一步：${next.title}。"
+        val message = when {
+            next == null -> "订单完成，请店长下发下一单。"
+            result.event == "manualSkip" -> "已记录跳过$completedStep，下一步：${next.title}。"
+            else -> "已完成$completedStep（$source），下一步：${next.title}。"
+        }
         (application as CupFlowCompanionApplication).cxrLink?.sendCustomCmd("cupflow_to_glass", Caps().apply {
             write("cupflow_flow")
             write(stepIndex.toString())
@@ -715,5 +742,9 @@ class MainActivity : Activity() {
             else -> "已暂停"
         }
         return "眼镜：${if (linkReady) "已连接" else "未连接"}（CXR ${if (cxrConnected) "通" else "断"} / 蓝牙 ${if (bluetoothConnected) "通" else "断"}）\n关键帧：$frame\n视觉服务：${visionSettings.label()} · $visionHealth\n自动识别：$recognition"
+    }
+
+    companion object {
+        private const val AUTHORIZATION_TIMEOUT_MS = 12_000L
     }
 }

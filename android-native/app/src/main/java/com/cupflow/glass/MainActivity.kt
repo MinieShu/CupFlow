@@ -103,9 +103,10 @@ class MainActivity : Activity() {
     private fun startOrder() {
         if (!state.status.contains("待开始")) return
         stopVoiceStart()
-        state = state.copy(status = "订单 ${state.orderId} · 制作中", message = "识别中…", alert = false)
+        val firstStep = state.steps.getOrNull(state.step) ?: "等待制作步骤"
+        state = state.copy(status = "订单 ${state.orderId} · 制作中", message = "第一步：$firstStep", alert = false)
         render()
-        speak("开始制作。")
+        speak("开始制作。第一步，$firstStep。")
         commandBridge.sendEvent("cupflow_started")
     }
 
@@ -150,18 +151,17 @@ class MainActivity : Activity() {
                     alert = false,
                 )
                 render()
-                speak(state.message)
+                speak(if (stepName == "订单完成") "订单完成。" else "已完成上一项。下一步，$stepName。")
             }
             "cupflow_alert" -> {
                 val reason = values.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "当前操作异常，请纠正后继续。"
                 state = state.copy(status = "订单 ${state.orderId} · 请纠正", message = "异常：$reason", alert = true)
                 render()
-                speak("异常，请纠正后继续。")
+                speak("异常，$reason。请纠正后继续。")
             }
             "cupflow_skip_saved" -> {
                 state = state.copy(message = values.getOrNull(1) ?: "跳过已记为异常，已继续下一步。", alert = false)
                 render()
-                speak("跳过已记录，继续下一步。")
             }
         }
     }
