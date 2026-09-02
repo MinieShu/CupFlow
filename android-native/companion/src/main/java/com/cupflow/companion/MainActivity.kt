@@ -91,7 +91,8 @@ class MainActivity : Activity() {
         setContentView(buildView())
         val app = application as CupFlowCompanionApplication
         if (app.token.isBlank()) render("请先授权并连接 Rokid AI App。")
-        else window.decorView.post { connect(app.token) }
+        else if (hasRequiredGlassesPermissions()) window.decorView.post { connect(app.token) }
+        else window.decorView.post { requestAuthorization() }
     }
 
     override fun onDestroy() {
@@ -358,17 +359,17 @@ class MainActivity : Activity() {
                 }
             })
         }
+        app.cxrLink = link
+        startCxrConnection(app, link, token)
+    }
+
+    private fun startCxrConnection(app: CupFlowCompanionApplication, link: CXRLink, token: String) {
         if (!link.configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.cupflow.glass"))) {
             connectionPending = false
             render("CupFlow 暂无法创建 Rokid 会话，正在准备重连。")
             scheduleReconnect("Rokid 会话未就绪")
             return
         }
-        app.cxrLink = link
-        startCxrConnection(app, link, token)
-    }
-
-    private fun startCxrConnection(app: CupFlowCompanionApplication, link: CXRLink, token: String) {
         if (!link.connect(token)) {
             connectionPending = false
             render("Rokid 媒体服务暂未接受连接，正在准备重连。")
@@ -476,6 +477,12 @@ class MainActivity : Activity() {
         }
         connect(token)
     }
+
+    private fun hasRequiredGlassesPermissions(): Boolean = arrayOf(
+        GlassPermission.CAMERA,
+        GlassPermission.MEDIA,
+        GlassPermission.MICROPHONE,
+    ).all(AuthorizationHelper::hasGlassPermission)
 
     private fun configureVisionEndpoint() {
         val input = EditText(this).apply {
