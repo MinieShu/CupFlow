@@ -124,7 +124,7 @@ class MainActivity : Activity() {
         glassesCard.addView(button("授权并连接眼镜", true) { requestAuthorization() })
         body.addView(glassesCard)
 
-        val orderCard = card("扫描下发订单", "杯贴识别后自动匹配饮品配方并下发眼镜")
+        val orderCard = card("扫描下发订单", "仅由店长手机扫描杯贴、核对并下发眼镜")
         orderText = text("当前无订单", 18f)
         procedureText = text("扫描杯贴后，这里会显示该订单的制作步骤。", 15f)
         orderCard.addView(orderText)
@@ -309,8 +309,8 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         when (event) {
                             "cupflow_glass_opened" -> {
-                            startAutoRecognition()
-                            render("● 眼镜端 CupFlow 已启动，后台识别中。")
+                                currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder)
+                                render("● 眼镜端 CupFlow 已启动，等待店长端下发订单。")
                             }
                             "cupflow_started" -> {
                                 if (currentOrder != null) {
@@ -361,11 +361,7 @@ class MainActivity : Activity() {
             else -> "○ 眼镜连接中断，当前步骤已保持。"
         }
         render(message)
-        if (linkReady) {
-            currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder) ?: run {
-                if (currentOrder == null) startAutoRecognition()
-            }
-        }
+        if (linkReady) currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder)
     }
 
     private fun scanCupLabelFromPhone() {
@@ -446,6 +442,10 @@ class MainActivity : Activity() {
             render("订单已重新下发，请在眼镜开始制作。")
             return
         }
+        if (currentOrder == null) {
+            render("当前无订单，请由店长手机扫描杯贴后下发。")
+            return
+        }
         visionHealth = "等待下一帧检查"
         startAutoRecognition()
         render("已恢复识别，当前步骤保持不变。")
@@ -458,7 +458,7 @@ class MainActivity : Activity() {
         }
         val output = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)
-        analyzeLabel(output.toByteArray(), fromGlasses = false)
+        analyzeLabel(output.toByteArray())
     }
 
     private fun takeGlassesPhoto() {
@@ -505,8 +505,7 @@ class MainActivity : Activity() {
         if (now - lastVisionAt < 800) return
         lastVisionFingerprint = fingerprint
         val order = currentOrder
-        if (order == null) analyzeLabel(frame.bytes, fromGlasses = true)
-        else if (productionStarted) analyzeOperation(frame.bytes, order)
+        if (order != null && productionStarted) analyzeOperation(frame.bytes, order)
     }
 
     private fun finishVisionCycle() {
@@ -534,10 +533,10 @@ class MainActivity : Activity() {
         return previous.indices.sumOf { index -> kotlin.math.abs(previous[index] - current[index]) } / current.size
     }
 
-    private fun analyzeLabel(bytes: ByteArray, fromGlasses: Boolean) {
+    private fun analyzeLabel(bytes: ByteArray) {
         analysisBusy = true
         lastVisionAt = System.currentTimeMillis()
-        render(if (fromGlasses) "眼镜正在识别空闲杯贴…" else "店长手机正在识别杯贴…")
+        render("店长手机正在识别杯贴…")
         executor.execute {
             try {
                 val result = vision.analyze(bytes, "label", null, null)
@@ -828,8 +827,8 @@ class MainActivity : Activity() {
 
     private fun startAutoRecognition() {
         if (autoLoop) return
-        if (!linkReady) {
-            render("眼镜未连接，无法启动识别。")
+        if (!linkReady || currentOrder == null || !productionStarted) {
+            if (!linkReady) render("眼镜未连接，无法启动识别。")
             return
         }
         autoLoop = true
@@ -854,8 +853,7 @@ class MainActivity : Activity() {
         currentRecipe = null
         stepIndex = 0
         productionStarted = false
-        startAutoRecognition()
-        render("当前订单已清除，可扫描下一张杯贴。")
+        render("当前订单已清除，请由店长手机扫描下一张杯贴。")
     }
 
     private fun useRecipeFor(order: CupOrder) {
