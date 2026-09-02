@@ -2,12 +2,14 @@ package com.cupflow.companion
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.View
@@ -85,6 +87,7 @@ class MainActivity : Activity() {
     private var deliveryAttempts = 0
     private var deliveryOrderId: String? = null
     private var startAfterDelivery = false
+    private var pendingPhoneScanUri: Uri? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -226,7 +229,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             authRequest -> handleAuthorization(resultCode, data)
-            phoneScanRequest -> handlePhonePhoto(data)
+            phoneScanRequest -> handlePhonePhoto(resultCode, data)
             recipeManagementRequest -> data?.getStringExtra(RecipeManagementActivity.EXTRA_DRINK)?.let { drink ->
                 recipeStore.load(drink)?.let { recipe ->
                     if (currentOrder?.drink == drink) currentRecipe = recipe
@@ -425,7 +428,28 @@ class MainActivity : Activity() {
     }
 
     private fun scanCupLabelFromPhone() {
-        startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE), phoneScanRequest)
+        pendingPhoneScanUri?.let { contentResolver.delete(it, null, null) }
+        val uri = contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "cupflow-label-${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            },
+        ) ?: run {
+            render("无法创建高清杯贴照片，请稍后重试。")
+            return
+        }
+        pendingPhoneScanUri = uri
+        try {
+            startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, phoneScanRequest)
+        } catch (error: Exception) {
+            contentResolver.delete(uri, null, null)
+            pendingPhoneScanUri = null
+            render("无法打开手机相机：${error.message.orEmpty()}")
+        }
     }
 
     private fun importOrderFromJson() {
@@ -526,14 +550,48 @@ class MainActivity : Activity() {
         render("已恢复识别，当前步骤保持不变。")
     }
 
-    private fun handlePhonePhoto(data: Intent?) {
-        val bitmap = data?.extras?.get("data") as? Bitmap ?: run {
+    private fun handlePhonePhoto(resultCode: Int, data: Intent?) {
+        val uri = pendingPhoneScanUri
+        pendingPhoneScanUri = null
+        if (resultCode != RESULT_OK) {
+            uri?.let { contentResolver.delete(it, null, null) }
+            render("已取消杯贴扫描。")
+            return
+        }
+        val bytes = uri?.let(::readHighQualityLabelPhoto) ?: run {
+            val bitmap = data?.extras?.get("data") as? Bitmap ?: return@run null
+            ByteArrayOutputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
+                output.toByteArray()
+            }
+        }
+        uri?.let { contentResolver.delete(it, null, null) }
+        if (bytes == null) {
             render("未取得手机扫描照片。")
             return
         }
-        val output = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)
-        analyzeLabel(output.toByteArray())
+        analyzeLabel(bytes)
+    }
+
+    private fun readHighQualityLabelPhoto(uri: Uri): ByteArray? {
+        val original = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+        if (original.size <= MAX_LABEL_IMAGE_BYTES) return original
+        val bitmap = BitmapFactory.decodeByteArray(original, 0, original.size) ?: return original
+        val longestEdge = maxOf(bitmap.width, bitmap.height).coerceAtLeast(1)
+        val scale = (MAX_LABEL_IMAGE_EDGE.toFloat() / longestEdge).coerceAtMost(1f)
+        val scaled = if (scale < 1f) Bitmap.createScaledBitmap(
+            bitmap,
+            (bitmap.width * scale).toInt().coerceAtLeast(1),
+            (bitmap.height * scale).toInt().coerceAtLeast(1),
+            true,
+        ) else bitmap
+        val compressed = ByteArrayOutputStream().use { output ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, 92, output)
+            output.toByteArray()
+        }
+        if (scaled !== bitmap) scaled.recycle()
+        bitmap.recycle()
+        return compressed
     }
 
     private fun takeGlassesPhoto() {
@@ -574,23 +632,19 @@ class MainActivity : Activity() {
         }
     }
 
-    /**
-     * Frames arrive at 2 FPS for responsive evidence capture. The cloud model sees a new
-     * frame as soon as the scene differs materially, never receives a backlog, and gets a
-     * 7-second safety recheck if the scene appears static.
-     */
+    /** Frames arrive at 2 FPS. A materially changed scene is checked with one earlier frame. */
     private fun evaluateLatestFrame() {
         val frame = latestFrame ?: return
         val fingerprint = latestFingerprint ?: return
         if (analysisBusy || !autoLoop) return
         val now = System.currentTimeMillis()
-        val sceneChanged = sceneDifference(lastVisionFingerprint, fingerprint) >= 12
+        val sceneChanged = sceneDifference(lastVisionFingerprint, fingerprint) >= 8
         val dueForSafetyCheck = now - lastVisionAt >= 7_000
         if (!sceneChanged && !dueForSafetyCheck) return
         if (now - lastVisionAt < 800) return
         lastVisionFingerprint = fingerprint
         val order = currentOrder
-        if (order != null && productionStarted) analyzeOperation(frame.bytes, order)
+        if (order != null && productionStarted) analyzeOperation(frame, order)
     }
 
     private fun finishVisionCycle() {
@@ -655,7 +709,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun analyzeOperation(bytes: ByteArray, order: CupOrder) {
+    private fun analyzeOperation(frame: CapturedFrame, order: CupOrder) {
         analysisBusy = true
         lastVisionAt = System.currentTimeMillis()
         val expected = currentRecipe?.steps?.getOrNull(stepIndex) ?: run {
@@ -666,7 +720,14 @@ class MainActivity : Activity() {
         executor.execute {
             try {
                 val gridContext = ingredientGridStore.visionContextFor(expected.title)
-                val result = vision.analyze(bytes, "operation", order, expected.title, gridContext)
+                val result = vision.analyze(
+                    frame.bytes,
+                    "operation",
+                    order,
+                    expected.title,
+                    gridContext,
+                    earlierFramesFor(frame),
+                )
                 visionHealth = "正常"
                 runOnUiThread {
                     finishVisionCycle()
@@ -694,6 +755,10 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun earlierFramesFor(current: CapturedFrame): List<ByteArray> = synchronized(frames) {
+        frames.lastOrNull { it.at <= current.at - 700 }?.let { listOf(it.bytes) } ?: emptyList()
     }
 
     private fun dispatchOrder(order: CupOrder) {
@@ -1024,5 +1089,7 @@ class MainActivity : Activity() {
         private const val MAX_RECONNECT_ATTEMPTS = 3
         private const val MAX_DELIVERY_ATTEMPTS = 3
         private const val ORDER_CONFIRM_TIMEOUT_MS = 1_500L
+        private const val MAX_LABEL_IMAGE_BYTES = 4_500_000
+        private const val MAX_LABEL_IMAGE_EDGE = 2_048
     }
 }

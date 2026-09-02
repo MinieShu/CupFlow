@@ -18,10 +18,22 @@ data class VisionResult(
 
 /** Calls the configured CupFlow route. Provider credentials stay outside the APK. */
 class VisionClient(private val endpointProvider: () -> String = { VisionSettingsStore.DEFAULT_ENDPOINT }) {
-    fun analyze(image: ByteArray, mode: String, order: CupOrder?, expectedStep: String?, gridContext: GridVisionContext? = null): VisionResult {
+    fun analyze(
+        image: ByteArray,
+        mode: String,
+        order: CupOrder?,
+        expectedStep: String?,
+        gridContext: GridVisionContext? = null,
+        earlierFrames: List<ByteArray> = emptyList(),
+    ): VisionResult {
         val body = JSONObject().apply {
             put("image", "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP))
             put("mode", mode)
+            if (mode == "operation" && earlierFrames.isNotEmpty()) {
+                put("frames", JSONArray(earlierFrames.take(1).map { frame ->
+                    "data:image/jpeg;base64," + Base64.encodeToString(frame, Base64.NO_WRAP)
+                }))
+            }
             if (order != null) {
                 put("order", JSONObject().apply {
                     put("id", order.id)
