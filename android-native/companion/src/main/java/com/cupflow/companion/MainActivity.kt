@@ -326,40 +326,6 @@ class MainActivity : Activity() {
                 override fun onGlassDeviceInfo(info: com.rokid.cxr.link.utils.GlassInfo) {}
                 override fun onGlassWearingStatus(wearing: Boolean) {}
             })
-            setCXRImageCbk(object : IImageStreamCbk {
-                override fun onImageReceived(data: ByteArray?) {
-                    captureBusy = false
-                    data?.let(::handleGlassesFrame) ?: render("眼镜未返回图片。")
-                }
-                override fun onImageError(code: Int, msg: String?) {
-                    captureBusy = false
-                    render("眼镜拍照失败：$code ${msg.orEmpty()}")
-                }
-            })
-            setCXRAudioCbk(object : IAudioStreamCbk {
-                override fun onAudioReceived(data: ByteArray, offset: Int, length: Int) {
-                    if (!voiceCaptureActive || length <= 0 || offset !in 0..data.size) return
-                    val safeLength = length.coerceAtMost(data.size - offset)
-                    if (safeLength <= 0) return
-                    synchronized(voiceBuffer) {
-                        if (voiceBuffer.size() < MAX_VOICE_PCM_BYTES) {
-                            val accepted = safeLength.coerceAtMost(MAX_VOICE_PCM_BYTES - voiceBuffer.size())
-                            voiceBuffer.write(data, offset, accepted)
-                        }
-                    }
-                }
-
-                override fun onAudioError(code: Int, msg: String?) {
-                    runOnUiThread {
-                        if (voiceCaptureActive) {
-                            stopGlassesVoiceCapture()
-                            sendVoiceResult("error", "眼镜麦克风不可用，请轻触开始。")
-                        }
-                    }
-                }
-
-                override fun onAudioStreamStateChanged(started: Boolean) {}
-            })
             setCXRCustomCmdCbk(object : ICustomCmdCbk {
                 override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
                     if (key != "cupflow_to_phone") return
@@ -401,6 +367,7 @@ class MainActivity : Activity() {
             scheduleReconnect("Rokid 会话未就绪")
             return
         }
+        registerMediaCallbacks(link)
         if (!link.connect(token)) {
             connectionPending = false
             render("Rokid 媒体服务暂未接受连接，正在准备重连。")
@@ -423,6 +390,43 @@ class MainActivity : Activity() {
                 }
             }
         }, 10_000)
+    }
+
+    private fun registerMediaCallbacks(link: CXRLink) {
+        link.setCXRImageCbk(object : IImageStreamCbk {
+            override fun onImageReceived(data: ByteArray?) {
+                captureBusy = false
+                data?.let(::handleGlassesFrame) ?: render("眼镜未返回图片。")
+            }
+            override fun onImageError(code: Int, msg: String?) {
+                captureBusy = false
+                render("眼镜拍照失败：$code ${msg.orEmpty()}")
+            }
+        })
+        link.setCXRAudioCbk(object : IAudioStreamCbk {
+            override fun onAudioReceived(data: ByteArray, offset: Int, length: Int) {
+                if (!voiceCaptureActive || length <= 0 || offset !in 0..data.size) return
+                val safeLength = length.coerceAtMost(data.size - offset)
+                if (safeLength <= 0) return
+                synchronized(voiceBuffer) {
+                    if (voiceBuffer.size() < MAX_VOICE_PCM_BYTES) {
+                        val accepted = safeLength.coerceAtMost(MAX_VOICE_PCM_BYTES - voiceBuffer.size())
+                        voiceBuffer.write(data, offset, accepted)
+                    }
+                }
+            }
+
+            override fun onAudioError(code: Int, msg: String?) {
+                runOnUiThread {
+                    if (voiceCaptureActive) {
+                        stopGlassesVoiceCapture()
+                        sendVoiceResult("error", "眼镜麦克风不可用，请轻触开始。")
+                    }
+                }
+            }
+
+            override fun onAudioStreamStateChanged(started: Boolean) {}
+        })
     }
 
     private fun scheduleReconnect(reason: String) {
