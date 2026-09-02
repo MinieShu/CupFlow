@@ -78,6 +78,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         autoLoop = false
+        (application as CupFlowCompanionApplication).cxrLink?.disconnect()
         executor.shutdownNow()
         frameExecutor.shutdownNow()
         super.onDestroy()
@@ -197,11 +198,28 @@ class MainActivity : Activity() {
     }
 
     private fun connect(token: String) {
-        val link = CXRLink(this).apply {
-            configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.cupflow.glass"))
+        val app = application as CupFlowCompanionApplication
+        app.cxrLink?.disconnect()
+        app.cxrLink = null
+        autoLoop = false
+        linkReady = false
+        cxrConnected = false
+        bluetoothConnected = false
+
+        val link = CXRLink(this)
+        link.apply {
             setCXRLinkCbk(object : ICXRLinkCbk {
-                override fun onCXRLConnected(connected: Boolean) { cxrConnected = connected; updateLinkReady() }
-                override fun onGlassBtConnected(connected: Boolean) { bluetoothConnected = connected; updateLinkReady() }
+                override fun onCXRLConnected(connected: Boolean) {
+                    if (app.cxrLink !== link) return
+                    cxrConnected = connected
+                    if (connected) bluetoothConnected = runCatching { link.isGlassBtConnected() }.getOrDefault(false)
+                    updateLinkReady()
+                }
+                override fun onGlassBtConnected(connected: Boolean) {
+                    if (app.cxrLink !== link) return
+                    bluetoothConnected = connected
+                    updateLinkReady()
+                }
                 override fun onGlassAiAssistStart() {}
                 override fun onGlassAiAssistStop() {}
             })
@@ -237,17 +255,40 @@ class MainActivity : Activity() {
                 }
             })
         }
-        val app = application as CupFlowCompanionApplication
+        if (!link.configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.cupflow.glass"))) {
+            render("CupFlow 无法创建 Rokid 会话，请先在眼镜端打开 CupFlow 后重试。")
+            return
+        }
         app.token = token
         app.cxrLink = link
-        link.connect(token)
-        render("正在连接 Rokid 眼镜…")
+        if (!link.connect(token)) {
+            app.cxrLink = null
+            render("无法连接 Rokid 媒体服务。请确认 Rokid AI App 已在前台运行，然后重新授权。")
+            return
+        }
+        render("正在连接 Rokid 媒体服务…")
+        window.decorView.postDelayed({
+            if (app.cxrLink !== link) return@postDelayed
+            when {
+                !cxrConnected -> {
+                    link.disconnect()
+                    app.cxrLink = null
+                    render("Rokid 媒体服务 10 秒未响应。请打开 Rokid AI App，再点“重新连接眼镜”。")
+                }
+                !bluetoothConnected -> render("Rokid 服务已连接，但未检测到眼镜数据通道。请在 Rokid AI App 确认眼镜已连接后重试。")
+            }
+        }, 10_000)
     }
 
     private fun updateLinkReady() = runOnUiThread {
-        linkReady = cxrConnected || bluetoothConnected
+        linkReady = cxrConnected && bluetoothConnected
         if (!linkReady) autoLoop = false
-        render(if (linkReady) "● 眼镜已连接，等待眼镜端 CupFlow 启动。" else "○ 眼镜连接中断，当前步骤已保持。")
+        val message = when {
+            linkReady -> "● 眼镜数据通道已连接，等待眼镜端 CupFlow 启动。"
+            cxrConnected -> "Rokid 服务已连接，正在等待眼镜数据通道。"
+            else -> "○ 眼镜连接中断，当前步骤已保持。"
+        }
+        render(message)
     }
 
     private fun scanCupLabelFromPhone() {
