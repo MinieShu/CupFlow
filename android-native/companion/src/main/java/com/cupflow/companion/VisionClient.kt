@@ -16,8 +16,8 @@ data class VisionResult(
     val durationMs: Long? = null,
 )
 
-/** Talks only to the Mac-local CupFlow route. Provider credentials stay on the Mac. */
-class VisionClient(private val endpoint: String = "http://127.0.0.1:3000/api/vision") {
+/** Calls the configured CupFlow route. Provider credentials stay outside the APK. */
+class VisionClient(private val endpointProvider: () -> String = { VisionSettingsStore.DEFAULT_ENDPOINT }) {
     fun analyze(image: ByteArray, mode: String, order: CupOrder?, expectedStep: String?, gridContext: GridVisionContext? = null): VisionResult {
         val body = JSONObject().apply {
             put("image", "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP))
@@ -45,7 +45,7 @@ class VisionClient(private val endpoint: String = "http://127.0.0.1:3000/api/vis
                 })
             }
         }
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(endpointProvider()).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000
             readTimeout = 30_000

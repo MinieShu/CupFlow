@@ -38,7 +38,8 @@ class MainActivity : Activity() {
     private val recipeManagementRequest = 4103
     private val executor = Executors.newSingleThreadExecutor()
     private val frameExecutor = Executors.newSingleThreadExecutor()
-    private val vision = VisionClient()
+    private val visionSettings by lazy { VisionSettingsStore(this) }
+    private val vision by lazy { VisionClient { visionSettings.endpoint() } }
     private val frames = ArrayDeque<CapturedFrame>()
     private val recipeStore by lazy { RecipeStore(this) }
     private val ingredientGridStore by lazy { IngredientGridStore(this) }
@@ -101,6 +102,7 @@ class MainActivity : Activity() {
         healthCard.addView(healthText)
         healthCard.addView(button("重新连接眼镜") { reconnectGlasses() })
         healthCard.addView(button("恢复当前订单识别") { resumeRecognition() })
+        healthCard.addView(button("配置视觉服务地址") { configureVisionEndpoint() })
         healthCard.addView(button("查看识别决策日志") { startActivity(Intent(this, DecisionLogActivity::class.java)) })
         body.addView(healthCard)
 
@@ -292,6 +294,28 @@ class MainActivity : Activity() {
     private fun reconnectGlasses() {
         val token = (application as CupFlowCompanionApplication).token
         if (token.isBlank()) requestAuthorization() else connect(token)
+    }
+
+    private fun configureVisionEndpoint() {
+        val input = EditText(this).apply {
+            setText(visionSettings.endpoint())
+            hint = VisionSettingsStore.DEFAULT_ENDPOINT
+            minLines = 2
+        }
+        AlertDialog.Builder(this)
+            .setTitle("视觉服务地址")
+            .setMessage("默认使用 USB 反向端口。非本机地址必须使用 HTTPS。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                val error = visionSettings.save(input.text.toString())
+                if (error != null) render("地址未保存：$error")
+                else {
+                    visionHealth = "等待下一帧检查"
+                    render("已切换到${visionSettings.label()}视觉服务。")
+                }
+            }
+            .show()
     }
 
     private fun resumeRecognition() {
@@ -600,6 +624,6 @@ class MainActivity : Activity() {
             autoLoop -> "空闲杯贴识别"
             else -> "已暂停"
         }
-        return "眼镜：${if (linkReady) "已连接" else "未连接"}（CXR ${if (cxrConnected) "通" else "断"} / 蓝牙 ${if (bluetoothConnected) "通" else "断"}）\n关键帧：$frame\n视觉服务：$visionHealth\n自动识别：$recognition"
+        return "眼镜：${if (linkReady) "已连接" else "未连接"}（CXR ${if (cxrConnected) "通" else "断"} / 蓝牙 ${if (bluetoothConnected) "通" else "断"}）\n关键帧：$frame\n视觉服务：${visionSettings.label()} · $visionHealth\n自动识别：$recognition"
     }
 }
