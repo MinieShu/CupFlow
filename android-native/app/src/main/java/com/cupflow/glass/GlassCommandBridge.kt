@@ -9,8 +9,7 @@ class GlassCommandBridge(private val onCommand: (List<String>) -> Unit) {
     private val bridge = CXRServiceBridge()
 
     init {
-        // Registers this foreground glass app as the active CXR command endpoint.
-        bridge.appLaunch()
+        activate()
         bridge.setStatusListener(object : CXRServiceBridge.StatusListener {
             override fun onConnected(peer: String?, deviceId: String?, deviceType: Int) {
                 Log.d("CupFlowCXR", "connected")
@@ -39,8 +38,9 @@ class GlassCommandBridge(private val onCommand: (List<String>) -> Unit) {
         })
     }
 
-    fun close() {
-        bridge.disconnectCXRDevice()
+    /** Re-register after the system returns this foreground app from the background. */
+    fun activate() {
+        bridge.appLaunch()
     }
 
     companion object {

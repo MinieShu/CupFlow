@@ -58,10 +58,14 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         stopVoiceStart()
-        commandBridge.close()
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::commandBridge.isInitialized) commandBridge.activate()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
