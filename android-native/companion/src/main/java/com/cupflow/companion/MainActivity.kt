@@ -32,7 +32,11 @@ import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
 import java.util.ArrayDeque
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.Executors
 
 data class CupOrder(val id: String, val drink: String, val options: List<String>)
@@ -55,6 +59,7 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var healthText: TextView
+    private lateinit var healthTitle: TextView
     private lateinit var cameraPreview: ImageView
     private lateinit var cameraPreviewText: TextView
     private lateinit var orderText: TextView
@@ -97,11 +102,16 @@ class MainActivity : Activity() {
     private var deliveryOrderId: String? = null
     private var startAfterDelivery = false
     private var pendingPhoneScanUri: Uri? = null
+    private var beijingClockActive = false
+    private val beijingClockFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA).apply {
+        timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         glassesName = getPreferences(MODE_PRIVATE).getString("glassesName", glassesName) ?: glassesName
         setContentView(buildView())
+        startBeijingClock()
         val app = application as CupFlowCompanionApplication
         if (app.token.isBlank()) render("请先授权并连接 Rokid AI App。")
         else if (hasRequiredGlassesPermissions()) window.decorView.post { connect(app.token) }
@@ -109,6 +119,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        beijingClockActive = false
         autoLoop = false
         previewLoop = false
         (application as CupFlowCompanionApplication).cxrLink?.disconnect()
@@ -133,6 +144,7 @@ class MainActivity : Activity() {
         body.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 18; bottomMargin = 14 })
 
         val healthCard = card("运行状态", "连接异常时不会推进当前步骤，可重新连接后继续")
+        healthTitle = healthCard.getChildAt(0) as TextView
         healthText = text("", 13f, 0xff39554b.toInt())
         healthCard.addView(healthText)
         healthCard.addView(button("重新连接眼镜") { reconnectGlasses() })
@@ -182,6 +194,16 @@ class MainActivity : Activity() {
         exceptionCard.addView(button("查看异常记录", true) { startActivity(Intent(this, ExceptionManagementActivity::class.java)) })
         body.addView(exceptionCard)
         return ScrollView(this).apply { addView(body) }
+    }
+
+    private fun startBeijingClock() {
+        beijingClockActive = true
+        fun tick() {
+            if (!beijingClockActive || isFinishing || isDestroyed) return
+            healthTitle.text = "运行状态  ·  北京时间 ${beijingClockFormat.format(Date())}"
+            window.decorView.postDelayed({ tick() }, 1_000)
+        }
+        tick()
     }
 
     private fun card(title: String, subtitle: String): LinearLayout = LinearLayout(this).apply {
