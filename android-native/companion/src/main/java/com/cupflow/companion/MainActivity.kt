@@ -487,7 +487,7 @@ class MainActivity : Activity() {
             cameraPreviewText.text = "画面更新延迟，正在重新获取…"
         }
         takeGlassesPhoto()
-        window.decorView.postDelayed({ tickCameraPreview() }, 700)
+        window.decorView.postDelayed({ tickCameraPreview() }, PREVIEW_CAPTURE_INTERVAL_MS)
     }
 
     private fun scanCupLabelFromPhone() {
@@ -732,7 +732,7 @@ class MainActivity : Activity() {
         val sceneChanged = sceneDifference(lastVisionFingerprint, fingerprint) >= 8
         val dueForSafetyCheck = now - lastVisionAt >= 7_000
         if (!sceneChanged && !dueForSafetyCheck) return
-        if (now - lastVisionAt < 800) return
+        if (now - lastVisionAt < OPERATION_VISION_INTERVAL_MS) return
         lastVisionFingerprint = fingerprint
         val order = currentOrder
         if (order != null && productionStarted) analyzeOperation(frame, order)
@@ -1203,6 +1203,8 @@ class MainActivity : Activity() {
         private const val MAX_DELIVERY_ATTEMPTS = 3
         private const val ORDER_CONFIRM_TIMEOUT_MS = 1_500L
         private const val CAMERA_CAPTURE_TIMEOUT_MS = 3_000L
+        private const val PREVIEW_CAPTURE_INTERVAL_MS = 500L
+        private const val OPERATION_VISION_INTERVAL_MS = 1_400L
         private const val IDLE_LABEL_RESCAN_MS = 8_000L
         private const val AUTO_ORDER_DUPLICATE_COOLDOWN_MS = 180_000L
         private const val MAX_LABEL_IMAGE_BYTES = 4_500_000
