@@ -71,6 +71,7 @@ class MainActivity : Activity() {
     private var stepIndex = 0
     private var productionStarted = false
     private var linkReady = false
+    private var glassAppReady = false
     private var cxrConnected = false
     private var bluetoothConnected = false
     private var captureBusy = false
@@ -319,6 +320,7 @@ class MainActivity : Activity() {
         connectionPending = true
         autoLoop = false
         linkReady = false
+        glassAppReady = false
         cxrConnected = false
         bluetoothConnected = false
         app.token = token
@@ -362,9 +364,13 @@ class MainActivity : Activity() {
                     val event = values.firstOrNull().orEmpty()
                     runOnUiThread {
                         when (event) {
-                            "cupflow_glass_opened" -> {
-                                currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder)
-                                render("● 眼镜端 CupFlow 已启动，等待店长端下发订单。")
+                            "cupflow_glass_opened", "cupflow_glass_ready" -> {
+                                val becameReady = !glassAppReady
+                                glassAppReady = true
+                                if (becameReady) {
+                                    currentOrder?.takeIf { !productionStarted }?.let(::dispatchOrder)
+                                    render("● 眼镜端 CupFlow 已启动，等待店长端下发订单。")
+                                }
                             }
                             "cupflow_started" -> {
                                 if (currentOrder != null) {
@@ -473,6 +479,7 @@ class MainActivity : Activity() {
     private fun updateLinkReady() = runOnUiThread {
         linkReady = cxrConnected && bluetoothConnected
         if (!linkReady) {
+            glassAppReady = false
             autoLoop = false
             previewLoop = false
             cameraPreviewText.text = "眼镜未连接，无法显示实时画面。"
@@ -897,6 +904,10 @@ class MainActivity : Activity() {
         val link = (application as CupFlowCompanionApplication).cxrLink
         if (link == null || !linkReady) {
             render("订单已读取；等待眼镜连接后再下发。")
+            return
+        }
+        if (!glassAppReady) {
+            render("订单已读取；等待眼镜端 CupFlow 就绪后自动下发。")
             return
         }
         if (!retry || deliveryOrderId != order.id || deliveryToken == null) {

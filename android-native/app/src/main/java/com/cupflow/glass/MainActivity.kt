@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private var pendingSpeech: String? = null
     private lateinit var commandBridge: GlassCommandBridge
     private var voiceRequestPending = false
+    private var readinessHeartbeatActive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,9 +55,11 @@ class MainActivity : Activity() {
         commandBridge = GlassCommandBridge(::handlePhoneCommand)
         setContentView(buildView())
         render()
+        startReadinessHeartbeat()
     }
 
     override fun onDestroy() {
+        readinessHeartbeatActive = false
         stopVoiceStart()
         tts?.stop()
         tts?.shutdown()
@@ -65,7 +68,16 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::commandBridge.isInitialized) commandBridge.activate()
+        if (::commandBridge.isInitialized) {
+            commandBridge.activate()
+            announceReady()
+            startReadinessHeartbeat()
+        }
+    }
+
+    override fun onPause() {
+        readinessHeartbeatActive = false
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -258,6 +270,22 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
     }
 
+    private fun announceReady() {
+        commandBridge.sendEvent("cupflow_glass_ready")
+    }
+
+    private fun startReadinessHeartbeat() {
+        if (readinessHeartbeatActive) return
+        readinessHeartbeatActive = true
+        fun tick() {
+            if (!readinessHeartbeatActive || isFinishing || isDestroyed) return
+            commandBridge.activate()
+            announceReady()
+            window.decorView.postDelayed({ tick() }, GLASS_READY_HEARTBEAT_MS)
+        }
+        tick()
+    }
+
     private fun scheduleVoiceStart(delayMs: Long = 1_100) {
         window.decorView.postDelayed({ requestVoiceStart() }, delayMs)
     }
@@ -273,5 +301,9 @@ class MainActivity : Activity() {
     private fun stopVoiceStart() {
         if (voiceRequestPending) commandBridge.sendEvent("cupflow_voice_stop")
         voiceRequestPending = false
+    }
+
+    companion object {
+        private const val GLASS_READY_HEARTBEAT_MS = 5_000L
     }
 }
