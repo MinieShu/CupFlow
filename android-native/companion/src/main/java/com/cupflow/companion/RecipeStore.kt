@@ -73,6 +73,8 @@ class RecipeStore(context: Context) {
             FlowStep("扣紧杯盖", "seal"),
             FlowStep("杯贴核验", "label"),
         )
+        private val bottomAdditions = setOf("珍珠", "椰果", "仙草", "布丁", "芋圆", "红豆", "西米", "多肉", "西柚", "冻冻")
+        private val topAdditions = setOf("芝士", "奶盖", "奶油")
 
         val defaultGuMingMilkTea = DrinkRecipe(
             drink = "古茗奶茶",
@@ -157,8 +159,6 @@ class RecipeStore(context: Context) {
         }
 
         private fun isTopAddition(name: String) = topAdditions.any(name::contains)
-        private val bottomAdditions = setOf("珍珠", "椰果", "仙草", "布丁", "芋圆", "红豆", "西米", "多肉", "西柚", "冻冻")
-        private val topAdditions = setOf("芝士", "奶盖", "奶油")
         private val legacyDefaultStepTitles = listOf("加入珍珠", "加入奶", "加入茶", "盖盖")
     }
 }
