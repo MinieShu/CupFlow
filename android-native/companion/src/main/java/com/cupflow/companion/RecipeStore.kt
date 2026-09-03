@@ -16,7 +16,8 @@ class RecipeStore(context: Context) {
     private val preferences = context.getSharedPreferences("cupflow_recipes", Context.MODE_PRIVATE)
 
     init {
-        if (load(defaultGuMingMilkTea.drink) == null) save(defaultGuMingMilkTea)
+        val savedDefault = load(defaultGuMingMilkTea.drink)
+        if (savedDefault == null || savedDefault.steps.map { it.title } == legacyDefaultStepTitles) save(defaultGuMingMilkTea)
     }
 
     fun load(drink: String): DrinkRecipe? = runCatching {
@@ -57,11 +58,15 @@ class RecipeStore(context: Context) {
 
     companion object {
         val supportedSteps = listOf(
-            FlowStep("取杯", "cup"),
-            FlowStep("加入珍珠", "pearls"),
+            FlowStep("取量杯", "measureCup"),
             FlowStep("加入奶", "milk"),
             FlowStep("加入茶", "tea"),
+            FlowStep("取饮品杯", "cup"),
+            FlowStep("加入珍珠", "pearls"),
+            FlowStep("加入混合后的奶茶", "mixedTea"),
             FlowStep("盖盖", "seal"),
+            FlowStep("检查杯贴", "label"),
+            FlowStep("取杯", "cup"),
             FlowStep("加入茶底", "tea"),
             FlowStep("核对液位", "measure"),
             FlowStep("扣紧杯盖", "seal"),
@@ -72,10 +77,14 @@ class RecipeStore(context: Context) {
             drink = "古茗奶茶",
             ingredients = listOf("珍珠"),
             steps = listOf(
-                FlowStep("加入珍珠", "pearls"),
+                FlowStep("取量杯", "measureCup"),
                 FlowStep("加入奶", "milk"),
                 FlowStep("加入茶", "tea"),
+                FlowStep("取饮品杯", "cup"),
+                FlowStep("加入珍珠", "pearls"),
+                FlowStep("加入混合后的奶茶", "mixedTea"),
                 FlowStep("盖盖", "seal"),
+                FlowStep("检查杯贴", "label"),
             ),
         )
 
@@ -90,20 +99,16 @@ class RecipeStore(context: Context) {
             val bottom = additions.filterNot(::isTopAddition)
             val top = additions.filter(::isTopAddition)
             val steps = base.steps.toMutableList()
-            var bottomIndex = (steps.indexOfFirst { it.title == "取杯" } + 1).coerceAtLeast(0)
+            var bottomIndex = (steps.indexOfFirst { it.title == "取饮品杯" } + 1).coerceAtLeast(0)
             bottom.forEach { addition -> steps.add(bottomIndex++, stepForTitle("加入$addition")!!) }
-            val lidIndex = steps.indexOfFirst { it.title == "扣紧杯盖" }
+            val lidIndex = steps.indexOfFirst { it.title == "盖盖" || it.title == "扣紧杯盖" }
             val measureIndex = steps.indexOfFirst { it.title == "核对液位" }
             var topIndex = if (lidIndex >= 0) lidIndex else if (measureIndex >= 0) measureIndex + 1 else steps.size
             top.forEach { addition -> steps.add(topIndex++, stepForTitle("加入$addition")!!) }
             return base.copy(steps = steps)
         }
 
-        fun defaultFor(order: CupOrder) = DrinkRecipe(
-            drink = order.drink,
-            ingredients = order.options,
-            steps = supportedSteps.filterNot { it.title == "加入珍珠" },
-        )
+        fun defaultFor(order: CupOrder) = defaultGuMingMilkTea.copy(drink = order.drink, ingredients = order.options)
 
         private fun additionName(option: String): String? {
             val value = option.trim()
@@ -116,7 +121,8 @@ class RecipeStore(context: Context) {
         }
 
         private fun isTopAddition(name: String) = topAdditions.any(name::contains)
-        private val bottomAdditions = setOf("珍珠", "椰果", "仙草", "布丁", "芋圆", "红豆", "西米")
+        private val bottomAdditions = setOf("珍珠", "椰果", "仙草", "布丁", "芋圆", "红豆", "西米", "多肉", "西柚", "冻冻")
         private val topAdditions = setOf("芝士", "奶盖", "奶油")
+        private val legacyDefaultStepTitles = listOf("加入珍珠", "加入奶", "加入茶", "盖盖")
     }
 }
