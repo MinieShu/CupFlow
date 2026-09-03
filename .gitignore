@@ -45,3 +45,4 @@ yarn-error.log*
 /android-glasses/.gradle/
 /android-glasses/build/
 /android-glasses/app/build/
+/.submission-work/
