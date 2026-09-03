@@ -79,6 +79,10 @@ class MainActivity : Activity() {
     private var latestFrame: CapturedFrame? = null
     private var latestFingerprint: IntArray? = null
     private var lastVisionFingerprint: IntArray? = null
+    private var lastIdleLabelFingerprint: IntArray? = null
+    private var lastIdleLabelScanAt = 0L
+    private var lastAutoDispatchedOrderId: String? = null
+    private var lastAutoDispatchedAt = 0L
     private var lastFrameAt = 0L
     private var visionHealth = "等待视觉服务检查"
     private var authorizationPending = false
@@ -713,8 +717,18 @@ class MainActivity : Activity() {
     private fun evaluateLatestFrame() {
         val frame = latestFrame ?: return
         val fingerprint = latestFingerprint ?: return
-        if (analysisBusy || !autoLoop) return
+        if (analysisBusy) return
         val now = System.currentTimeMillis()
+        if (isIdleForGlassesLabelScan()) {
+            val sceneChanged = sceneDifference(lastIdleLabelFingerprint, fingerprint) >= 8
+            val dueForRescan = now - lastIdleLabelScanAt >= IDLE_LABEL_RESCAN_MS
+            if (!sceneChanged && !dueForRescan) return
+            lastIdleLabelFingerprint = fingerprint
+            lastIdleLabelScanAt = now
+            analyzeLabel(frame.bytes, fromGlassesIdleScan = true)
+            return
+        }
+        if (!autoLoop) return
         val sceneChanged = sceneDifference(lastVisionFingerprint, fingerprint) >= 8
         val dueForSafetyCheck = now - lastVisionAt >= 7_000
         if (!sceneChanged && !dueForSafetyCheck) return
@@ -749,10 +763,13 @@ class MainActivity : Activity() {
         return previous.indices.sumOf { index -> kotlin.math.abs(previous[index] - current[index]) } / current.size
     }
 
-    private fun analyzeLabel(bytes: ByteArray) {
+    private fun isIdleForGlassesLabelScan(): Boolean = currentOrder == null ||
+        (productionStarted && currentRecipe?.steps?.getOrNull(stepIndex) == null)
+
+    private fun analyzeLabel(bytes: ByteArray, fromGlassesIdleScan: Boolean = false) {
         analysisBusy = true
         lastVisionAt = System.currentTimeMillis()
-        render("店长手机正在识别杯贴…")
+        if (fromGlassesIdleScan) render("眼镜发现新画面，正在识别杯贴…") else render("店长手机正在识别杯贴…")
         executor.execute {
             try {
                 val result = vision.analyze(bytes, "label", null, null)
@@ -763,16 +780,28 @@ class MainActivity : Activity() {
                 val options = listOfNotNull(ticket?.optString("sugar")?.takeIf { it.isNotBlank() }, ticket?.optString("ice")?.takeIf { it.isNotBlank() }, ticket?.optString("topping")?.takeIf { it.isNotBlank() })
                 runOnUiThread {
                     finishVisionCycle()
-                    if (id.isBlank() || drink.isBlank() || result.confidence < 0.85) {
-                        decisionLogStore.append(null, "杯贴识别", result, "等待人工核对", "订单字段不完整或置信度不足")
-                        render("杯贴识别不完整或置信度不足，请重新扫描后手动核对。")
+                    val minimumConfidence = if (fromGlassesIdleScan) 0.90 else 0.85
+                    val duplicate = fromGlassesIdleScan && id == lastAutoDispatchedOrderId &&
+                        System.currentTimeMillis() - lastAutoDispatchedAt < AUTO_ORDER_DUPLICATE_COOLDOWN_MS
+                    if (id.isBlank() || drink.isBlank() || result.confidence < minimumConfidence || duplicate) {
+                        if (!fromGlassesIdleScan) {
+                            decisionLogStore.append(null, "杯贴识别", result, "等待人工核对", "订单字段不完整或置信度不足")
+                            render("杯贴识别不完整或置信度不足，请重新扫描后手动核对。")
+                        } else if (duplicate) {
+                            render("已忽略重复杯贴订单：$id。")
+                        }
                     } else {
                         currentOrder = CupOrder(id, drink, options)
                         stepIndex = 0
                         productionStarted = false
                         useRecipeFor(currentOrder!!)
                         dispatchOrder(currentOrder!!)
-                        decisionLogStore.append(currentOrder, "杯贴识别", result, "订单已下发", result.reason.ifBlank { "高置信度订单识别" })
+                        if (fromGlassesIdleScan) {
+                            lastAutoDispatchedOrderId = id
+                            lastAutoDispatchedAt = System.currentTimeMillis()
+                        }
+                        val source = if (fromGlassesIdleScan) "眼镜空闲杯贴" else "杯贴识别"
+                        decisionLogStore.append(currentOrder, source, result, "订单已下发", result.reason.ifBlank { "高置信度订单识别" })
                         render("已高置信度识别并自动下发：$id · $drink")
                     }
                 }
@@ -1098,13 +1127,7 @@ class MainActivity : Activity() {
             return
         }
         autoLoop = true
-        tickAutoLoop()
-    }
-
-    private fun tickAutoLoop() {
-        if (!autoLoop) return
         takeGlassesPhoto()
-        window.decorView.postDelayed({ tickAutoLoop() }, 500)
     }
 
     private fun saveGlassesName() {
@@ -1174,6 +1197,8 @@ class MainActivity : Activity() {
         private const val MAX_DELIVERY_ATTEMPTS = 3
         private const val ORDER_CONFIRM_TIMEOUT_MS = 1_500L
         private const val CAMERA_CAPTURE_TIMEOUT_MS = 3_000L
+        private const val IDLE_LABEL_RESCAN_MS = 8_000L
+        private const val AUTO_ORDER_DUPLICATE_COOLDOWN_MS = 180_000L
         private const val MAX_LABEL_IMAGE_BYTES = 4_500_000
         private const val MAX_LABEL_IMAGE_EDGE = 2_048
     }
