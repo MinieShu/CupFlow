@@ -350,6 +350,7 @@ class MainActivity : Activity() {
                             }
                             "cupflow_order_received" -> confirmOrderDelivery(values.getOrNull(1))
                             "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
+                            "cupflow_retry" -> if (!exceptionSaving) resumeRecognition()
                             "cupflow_voice_start" -> startGlassesVoiceCapture()
                             "cupflow_voice_stop" -> stopGlassesVoiceCapture()
                         }
@@ -1021,10 +1022,12 @@ class MainActivity : Activity() {
         if (exceptionSaving) return
         exceptionSaving = true
         autoLoop = false
-        render("异常 ${result.event}：${result.reason}。正在保留前后 2 秒关键帧…")
+        val stepName = currentRecipe?.steps?.getOrNull(stepIndex)?.title ?: "当前步骤"
+        val errorDetail = "$stepName：${result.reason.ifBlank { "当前操作异常，请纠正后继续。" }}"
+        render("步骤错误 $errorDetail。正在保留前后 2 秒关键帧…")
         (application as CupFlowCompanionApplication).cxrLink?.sendCustomCmd("cupflow_to_glass", Caps().apply {
             write("cupflow_alert")
-            write(result.reason.ifBlank { "当前操作异常，请纠正后继续。" })
+            write(errorDetail)
         })
         window.decorView.postDelayed({
             val order = currentOrder ?: return@postDelayed

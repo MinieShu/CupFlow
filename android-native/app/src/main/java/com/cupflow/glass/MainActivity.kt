@@ -30,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var message: TextView
     private lateinit var action: TextView
     private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var pendingSpeech: String? = null
     private lateinit var commandBridge: GlassCommandBridge
     private var voiceRequestPending = false
 
@@ -38,7 +40,14 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterImmersiveMode()
         tts = TextToSpeech(this) { result ->
-            if (result == TextToSpeech.SUCCESS) tts?.language = Locale.SIMPLIFIED_CHINESE
+            if (result == TextToSpeech.SUCCESS) {
+                val languageResult = tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
+                ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA && languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+                pendingSpeech?.let {
+                    pendingSpeech = null
+                    speak(it)
+                }
+            }
         }
         window.setBackgroundDrawableResource(R.color.glass_background)
         window.decorView.setBackgroundColor(Color.BLACK)
@@ -111,9 +120,22 @@ class MainActivity : Activity() {
 
     private fun handleActionTap() {
         when {
+            state.alert -> returnToErrorStep()
             state.status.contains("待开始") -> startOrder()
             state.status.contains("制作中") -> skipCurrentStep()
         }
+    }
+
+    private fun returnToErrorStep() {
+        val stepName = state.steps.getOrNull(state.step) ?: "当前步骤"
+        state = state.copy(
+            status = "订单 ${state.orderId} · 制作中",
+            message = "请重新执行：$stepName",
+            alert = false,
+        )
+        render()
+        speak("请重新执行，$stepName。")
+        commandBridge.sendEvent("cupflow_retry")
     }
 
     private fun skipCurrentStep() {
@@ -168,9 +190,9 @@ class MainActivity : Activity() {
             }
             "cupflow_alert" -> {
                 val reason = values.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "当前操作异常，请纠正后继续。"
-                state = state.copy(status = "订单 ${state.orderId} · 请纠正", message = "异常：$reason", alert = true)
+                state = state.copy(status = "订单 ${state.orderId} · 步骤错误", message = "步骤错误：$reason", alert = true)
                 render()
-                speak("异常，$reason。请纠正后继续。")
+                speak("步骤错误，$reason。请纠正后继续。")
             }
             "cupflow_skip_saved" -> {
                 state = state.copy(message = values.getOrNull(1) ?: "跳过已记为异常，已继续下一步。", alert = false)
@@ -196,6 +218,7 @@ class MainActivity : Activity() {
         currentStep.setTextColor(color)
         message.setTextColor(color)
         action.text = when {
+            state.alert -> "轻触返回当前步骤；纠正后将自动继续"
             state.status.contains("待开始") -> "说“开始制作”或轻触开始"
             state.status.contains("制作中") -> "轻触跳过当前步骤（将记录异常）"
             else -> ""
@@ -204,6 +227,10 @@ class MainActivity : Activity() {
     }
 
     private fun speak(value: String) {
+        if (!ttsReady) {
+            pendingSpeech = value
+            return
+        }
         tts?.speak(value, TextToSpeech.QUEUE_FLUSH, null, "cupflow")
     }
 
