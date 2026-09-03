@@ -837,14 +837,20 @@ class MainActivity : Activity() {
                 visionHealth = "正常"
                 runOnUiThread {
                     finishVisionCycle()
+                    val ingredientMismatch = result.confidence >= 0.75 &&
+                        result.event in setOf("pearls", "topping") && result.event != expected.event
+                    val flaggedResult = if (ingredientMismatch) result.copy(
+                        event = "wrong",
+                        reason = result.reason.ifBlank { "当前应执行${expected.title}，检测到不匹配小料。" },
+                    ) else result
                     when {
                         result.event == expected.event && result.confidence >= 0.75 -> {
                             decisionLogStore.append(order, expected.title, result, "推进步骤", result.reason.ifBlank { "事件与当前步骤匹配" })
                             advance(result)
                         }
-                        result.event in setOf("wrong", "wrongLabel", "overfill") -> {
-                            decisionLogStore.append(order, expected.title, result, "异常提醒", result.reason.ifBlank { "检测到不匹配操作" })
-                            saveException(result)
+                        flaggedResult.event in setOf("wrong", "wrongLabel", "overfill") -> {
+                            decisionLogStore.append(order, expected.title, flaggedResult, "异常提醒", flaggedResult.reason.ifBlank { "检测到不匹配操作" })
+                            saveException(flaggedResult)
                         }
                         else -> {
                             decisionLogStore.append(order, expected.title, result, "保持当前步骤", result.reason.ifBlank { "画面暂不确定" })
