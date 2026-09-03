@@ -86,8 +86,6 @@ class MainActivity : Activity() {
     private var lastVisionFingerprint: IntArray? = null
     private var lastIdleLabelFingerprint: IntArray? = null
     private var lastIdleLabelScanAt = 0L
-    private var lastAutoDispatchedOrderId: String? = null
-    private var lastAutoDispatchedAt = 0L
     private var lastFrameAt = 0L
     private var visionHealth = "等待视觉服务检查"
     private var authorizationPending = false
@@ -803,14 +801,10 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     finishVisionCycle()
                     val minimumConfidence = if (fromGlassesIdleScan) 0.90 else 0.85
-                    val duplicate = fromGlassesIdleScan && id == lastAutoDispatchedOrderId &&
-                        System.currentTimeMillis() - lastAutoDispatchedAt < AUTO_ORDER_DUPLICATE_COOLDOWN_MS
-                    if (!isUsableOrderField(id) || !isUsableOrderField(drink) || result.confidence < minimumConfidence || duplicate) {
+                    if (!isUsableOrderField(id) || !isUsableOrderField(drink) || result.confidence < minimumConfidence) {
                         if (!fromGlassesIdleScan) {
                             decisionLogStore.append(null, "杯贴识别", result, "等待人工核对", "订单字段不完整或置信度不足")
                             render("杯贴识别不完整或置信度不足，请重新扫描后手动核对。")
-                        } else if (duplicate) {
-                            render("已忽略重复杯贴订单：$id。")
                         } else {
                             render("未发现可下发的有效杯贴订单，继续等待。")
                         }
@@ -820,10 +814,6 @@ class MainActivity : Activity() {
                         productionStarted = false
                         useRecipeFor(currentOrder!!)
                         dispatchOrder(currentOrder!!)
-                        if (fromGlassesIdleScan) {
-                            lastAutoDispatchedOrderId = id
-                            lastAutoDispatchedAt = System.currentTimeMillis()
-                        }
                         val source = if (fromGlassesIdleScan) "眼镜空闲杯贴" else "杯贴识别"
                         decisionLogStore.append(currentOrder, source, result, "订单已下发", result.reason.ifBlank { "高置信度订单识别" })
                         render("已高置信度识别并自动下发：$id · $drink")
@@ -1234,7 +1224,6 @@ class MainActivity : Activity() {
         private const val PREVIEW_CAPTURE_INTERVAL_MS = 500L
         private const val OPERATION_VISION_INTERVAL_MS = 1_400L
         private const val IDLE_LABEL_RESCAN_MS = 8_000L
-        private const val AUTO_ORDER_DUPLICATE_COOLDOWN_MS = 180_000L
         private const val MAX_LABEL_IMAGE_BYTES = 4_500_000
         private const val MAX_LABEL_IMAGE_EDGE = 2_048
     }
