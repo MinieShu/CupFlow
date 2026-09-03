@@ -156,6 +156,7 @@ class MainActivity : Activity() {
             "cupflow_order" -> {
                 val orderId = values.getOrNull(1).orEmpty()
                 val drink = values.getOrNull(2).orEmpty()
+                val deliveryToken = values.getOrNull(6).orEmpty()
                 state = CupFlowState(
                     steps = parseSteps(values.getOrNull(5)),
                     status = "订单 $orderId · 待开始",
@@ -165,9 +166,10 @@ class MainActivity : Activity() {
                 )
                 render()
                 speak("订单 $orderId，$drink。请说开始制作，或轻触开始。")
-                commandBridge.sendEvent("cupflow_order_received", orderId)
+                commandBridge.sendEvent("cupflow_order_received", orderId, deliveryToken)
                 scheduleVoiceStart()
             }
+            "cupflow_clear_order" -> clearOrder()
             "cupflow_start" -> startOrder()
             "cupflow_voice_result" -> {
                 voiceRequestPending = false
@@ -210,6 +212,13 @@ class MainActivity : Activity() {
         val array = JSONArray(raw ?: "[]")
         buildList { for (index in 0 until array.length()) array.optString(index).trim().takeIf { it.isNotBlank() }?.let(::add) }
     }.getOrDefault(emptyList())
+
+    private fun clearOrder() {
+        stopVoiceStart()
+        state = CupFlowState()
+        render()
+        speak("当前订单已结束，等待店长下发下一单。")
+    }
 
     private fun render() {
         status.text = state.orderId?.let { "$it · ${state.drink.orEmpty()}" } ?: "CupFlow · 等待订单"

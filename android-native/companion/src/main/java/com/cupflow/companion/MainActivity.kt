@@ -98,6 +98,8 @@ class MainActivity : Activity() {
     private var deliveryPending = false
     private var deliveryAttempts = 0
     private var deliveryOrderId: String? = null
+    private var deliveryToken: String? = null
+    private var deliverySequence = 0L
     private var startAfterDelivery = false
     private var pendingPhoneScanUri: Uri? = null
     private var beijingClockActive = false
@@ -372,7 +374,7 @@ class MainActivity : Activity() {
                                     startAutoRecognition()
                                 }
                             }
-                            "cupflow_order_received" -> confirmOrderDelivery(values.getOrNull(1))
+                            "cupflow_order_received" -> confirmOrderDelivery(values.getOrNull(1), values.getOrNull(2))
                             "cupflow_skip" -> recordManualSkip(values.getOrNull(1))
                             "cupflow_retry" -> if (!exceptionSaving) resumeRecognition()
                             "cupflow_voice_start" -> startGlassesVoiceCapture()
@@ -891,16 +893,18 @@ class MainActivity : Activity() {
         frames.lastOrNull { it.at <= current.at - 700 }?.let { listOf(it.bytes) } ?: emptyList()
     }
 
-    private fun dispatchOrder(order: CupOrder) {
+    private fun dispatchOrder(order: CupOrder, retry: Boolean = false) {
         val link = (application as CupFlowCompanionApplication).cxrLink
         if (link == null || !linkReady) {
             render("订单已读取；等待眼镜连接后再下发。")
             return
         }
-        if (deliveryOrderId != order.id) {
+        if (!retry || deliveryOrderId != order.id || deliveryToken == null) {
             deliveryOrderId = order.id
             deliveryAttempts = 0
+            deliveryToken = "${order.id}-${++deliverySequence}"
         }
+        val token = deliveryToken ?: return
         deliveryPending = true
         deliveryAttempts += 1
         link.sendCustomCmd("cupflow_to_glass", Caps().apply {
@@ -910,11 +914,12 @@ class MainActivity : Activity() {
             write(order.options.joinToString("、"))
             write(glassesName)
             write(JSONArray(currentRecipe?.steps?.map { it.title }.orEmpty()).toString())
+            write(token)
         })
         render("正在下发订单（第 $deliveryAttempts 次），等待眼镜确认…")
         window.decorView.postDelayed({
-            if (!deliveryPending || currentOrder?.id != order.id) return@postDelayed
-            if (deliveryAttempts < MAX_DELIVERY_ATTEMPTS) dispatchOrder(order)
+            if (!deliveryPending || deliveryToken != token || currentOrder?.id != order.id) return@postDelayed
+            if (deliveryAttempts < MAX_DELIVERY_ATTEMPTS) dispatchOrder(order, retry = true)
             else {
                 deliveryPending = false
                 render("眼镜未确认收到订单，请检查连接后点击“重新下发当前订单”。")
@@ -922,9 +927,9 @@ class MainActivity : Activity() {
         }, ORDER_CONFIRM_TIMEOUT_MS)
     }
 
-    private fun confirmOrderDelivery(orderId: String?) {
+    private fun confirmOrderDelivery(orderId: String?, confirmationToken: String?) {
         val order = currentOrder ?: return
-        if (order.id != orderId) return
+        if (order.id != orderId || deliveryToken != confirmationToken) return
         deliveryPending = false
         deliveryAttempts = 0
         render("订单已送达眼镜：${order.id} · ${order.drink}。")
@@ -1161,6 +1166,10 @@ class MainActivity : Activity() {
     }
 
     private fun clearOrder() {
+        val link = (application as CupFlowCompanionApplication).cxrLink
+        if (linkReady && link != null) {
+            link.sendCustomCmd("cupflow_to_glass", Caps().apply { write("cupflow_clear_order") })
+        }
         autoLoop = false
         currentOrder = null
         currentRecipe = null
@@ -1168,6 +1177,8 @@ class MainActivity : Activity() {
         productionStarted = false
         deliveryPending = false
         deliveryOrderId = null
+        deliveryToken = null
+        deliverySequence += 1
         startAfterDelivery = false
         render("当前订单已清除，请由店长手机扫描下一张杯贴。")
     }
