@@ -58,6 +58,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         stopVoiceStart()
+        commandBridge.close()
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
