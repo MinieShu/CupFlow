@@ -783,12 +783,14 @@ class MainActivity : Activity() {
                     val minimumConfidence = if (fromGlassesIdleScan) 0.90 else 0.85
                     val duplicate = fromGlassesIdleScan && id == lastAutoDispatchedOrderId &&
                         System.currentTimeMillis() - lastAutoDispatchedAt < AUTO_ORDER_DUPLICATE_COOLDOWN_MS
-                    if (id.isBlank() || drink.isBlank() || result.confidence < minimumConfidence || duplicate) {
+                    if (!isUsableOrderField(id) || !isUsableOrderField(drink) || result.confidence < minimumConfidence || duplicate) {
                         if (!fromGlassesIdleScan) {
                             decisionLogStore.append(null, "杯贴识别", result, "等待人工核对", "订单字段不完整或置信度不足")
                             render("杯贴识别不完整或置信度不足，请重新扫描后手动核对。")
                         } else if (duplicate) {
                             render("已忽略重复杯贴订单：$id。")
+                        } else {
+                            render("未发现可下发的有效杯贴订单，继续等待。")
                         }
                     } else {
                         currentOrder = CupOrder(id, drink, options)
@@ -814,6 +816,10 @@ class MainActivity : Activity() {
             }
         }
     }
+
+    private fun isUsableOrderField(value: String): Boolean = value.trim().lowercase() !in setOf(
+        "", "null", "unknown", "n/a", "na", "none", "未识别", "无",
+    )
 
     private fun analyzeOperation(frame: CapturedFrame, order: CupOrder) {
         analysisBusy = true
