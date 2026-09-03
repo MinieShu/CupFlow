@@ -18,6 +18,7 @@ class RecipeStore(context: Context) {
     init {
         val savedDefault = load(defaultGuMingMilkTea.drink)
         if (savedDefault == null || savedDefault.steps.map { it.title } == legacyDefaultStepTitles) save(defaultGuMingMilkTea)
+        showcaseRecipes.forEach { recipe -> if (load(recipe.drink) == null) save(recipe) }
     }
 
     fun load(drink: String): DrinkRecipe? = runCatching {
@@ -88,6 +89,25 @@ class RecipeStore(context: Context) {
             ),
         )
 
+        val showcaseRecipes = listOf(
+            defaultGuMingMilkTea.copy(drink = "珍珠奶茶"),
+            defaultGuMingMilkTea.copy(
+                drink = "椰果奶茶",
+                ingredients = listOf("椰果"),
+                steps = standardMilkTeaSteps(listOf("椰果")),
+            ),
+            defaultGuMingMilkTea.copy(
+                drink = "红豆布丁奶茶",
+                ingredients = listOf("红豆", "布丁"),
+                steps = standardMilkTeaSteps(listOf("红豆", "布丁")),
+            ),
+            defaultGuMingMilkTea.copy(
+                drink = "奶盖多肉奶茶",
+                ingredients = listOf("多肉", "奶盖"),
+                steps = standardMilkTeaSteps(listOf("多肉", "奶盖")),
+            ),
+        )
+
         fun stepForTitle(title: String): FlowStep? = supportedSteps.firstOrNull { it.title == title }
             ?: title.takeIf { it.startsWith("加入") && it.removePrefix("加入").trim().isNotBlank() }?.let { FlowStep(it, "topping") }
 
@@ -109,6 +129,22 @@ class RecipeStore(context: Context) {
         }
 
         fun defaultFor(order: CupOrder) = defaultGuMingMilkTea.copy(drink = order.drink, ingredients = order.options)
+
+        private fun standardMilkTeaSteps(additions: List<String>): List<FlowStep> {
+            val bottom = additions.filterNot(::isTopAddition).map { addition -> stepForTitle("加入$addition")!! }
+            val top = additions.filter(::isTopAddition).map { addition -> stepForTitle("加入$addition")!! }
+            return listOf(
+            FlowStep("取量杯", "measureCup"),
+            FlowStep("加入奶", "milk"),
+            FlowStep("加入茶", "tea"),
+            FlowStep("取饮品杯", "cup"),
+            ) + bottom + listOf(
+            FlowStep("加入混合后的奶茶", "mixedTea"),
+            ) + top + listOf(
+            FlowStep("盖盖", "seal"),
+            FlowStep("检查杯贴", "label"),
+        )
+        }
 
         private fun additionName(option: String): String? {
             val value = option.trim()
